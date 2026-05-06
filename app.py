@@ -21,12 +21,22 @@ TPEX_TYPES = {"otc", "tpex"}
 
 
 def valid_code(code):
-    return bool(re.match(r"^\d{4}$", str(code))) and not str(code).startswith("0")
+    code = str(code)
+    return bool(re.match(r"^\d{4}$", code)) and not code.startswith("0")
+
+
+def create_api(token):
+    api = DataLoader()
+    if token:
+        api.token = token
+    return api
 
 
 @st.cache_data(ttl=3600)
-def fetch_all_stock_codes(_api):
-    info = _api.taiwan_stock_info()
+def fetch_all_stock_codes_cached(token):
+    api = create_api(token)
+
+    info = api.taiwan_stock_info()
 
     if info is None or info.empty:
         return [], [], []
@@ -165,7 +175,9 @@ def detect_inside_bar(df, stock_id, scan_dates, global_seen):
     return signals
 
 
-def run_scan(api, sampled, scan_dates, fetch_start, fetch_end):
+def run_scan(token, sampled, scan_dates, fetch_start, fetch_end, sleep_sec):
+    api = create_api(token)
+
     all_signals = []
     skipped = []
     global_seen = set()
@@ -197,42 +209,50 @@ def run_scan(api, sampled, scan_dates, fetch_start, fetch_end):
             f"掃描進度：{idx}/{len(sampled)}｜目前訊號：{len(all_signals)}｜耗時：{time.time() - t0:.1f} 秒"
         )
 
-        time.sleep(0.15)
+        time.sleep(sleep_sec)
 
     return all_signals, skipped, time.time() - t0
 
 
 st.set_page_config(
-    page_title="子母懷抱掃描器",
+    page_title="台股子母懷抱掃描器",
     layout="wide"
 )
 
 st.title("台股子母懷抱掃描器")
 st.caption("條件：子線實體完全包在母線實體內，只看開盤價與收盤價，不看影線。")
 
+if "token_verified" not in st.session_state:
+    st.session_state["token_verified"] = False
+
 with st.sidebar:
-    st.header("掃描設定")
+    st.header("第 1 步：FinMind Token")
+
+    token_input = st.text_input(
+        "請輸入 FinMind API Token",
+        type="password",
+        placeholder="請輸入你的 FinMind Token"
+    )
+
+    verify_token = st.button("驗證 Token / 載入股票清單", type="primary")
+
+    st.divider()
+
+    st.header("第 2 步：掃描設定")
 
     mode = st.radio(
         "執行模式",
-        ["訪客模式：隨機抽 300 檔", "完整模式：掃描全台股"]
+        ["訪客模式：隨機抽樣", "完整模式：掃描全台股"],
+        disabled=not st.session_state["token_verified"]
     )
-
-    token = ""
-
-    if mode == "完整模式：掃描全台股":
-        token = st.text_input(
-            "FinMind Token",
-            type="password",
-            placeholder="請輸入 FinMind Token"
-        )
 
     scan_days = st.number_input(
         "掃描近幾個交易日",
         min_value=1,
         max_value=20,
         value=SCAN_TRADE_DAYS,
-        step=1
+        step=1,
+        disabled=not st.session_state["token_verified"]
     )
 
     guest_sample = st.number_input(
@@ -240,23 +260,73 @@ with st.sidebar:
         min_value=50,
         max_value=1000,
         value=GUEST_SAMPLE,
-        step=50
+        step=50,
+        disabled=not st.session_state["token_verified"]
     )
 
-    start_scan = st.button("開始掃描", type="primary")
+    sleep_sec = st.number_input(
+        "每檔 API 間隔秒數",
+        min_value=0.05,
+        max_value=2.0,
+        value=0.15,
+        step=0.05,
+        disabled=not st.session_state["token_verified"]
+    )
+
+    start_scan = st.button(
+        "開始掃描",
+        disabled=not st.session_state["token_verified"]
+    )
+
+
+if verify_token:
+    if not token_input:
+        st.error("請先輸入 FinMind Token。")
+        st.stop()
+
+    with st.spinner("正在驗證 Token 並載入股票清單..."):
+        try:
+            twse, tpex, all_codes = fetch_all_stock_codes_cached(token_input)
+
+            if not all_codes:
+                st.error("Token 驗證失敗，或無法取得股票清單。")
+                st.stop()
+
+            st.session_state["token"] = token_input
+            st.session_state["twse"] = twse
+            st.session_state["tpex"] = tpex
+            st.session_state["all_codes"] = all_codes
+            st.session_state["token_verified"] = True
+
+            st.success("Token 驗證成功，股票清單已載入。")
+            st.info(f"上市：{len(twse)} 檔｜上櫃：{len(tpex)} 檔｜合計：{len(all_codes)} 檔")
+
+        except Exception as e:
+            st.session_state["token_verified"] = False
+            st.error(f"驗證失敗：{e}")
+            st.stop()
+
+
+if not st.session_state["token_verified"]:
+    st.info("請先在左側輸入 FinMind Token，並按「驗證 Token / 載入股票清單」。")
+    st.stop()
+
+
+st.success("Token 已驗證，可以開始掃描。")
+
+twse = st.session_state["twse"]
+tpex = st.session_state["tpex"]
+all_codes = st.session_state["all_codes"]
+token = st.session_state["token"]
+
+col_a, col_b, col_c = st.columns(3)
+col_a.metric("上市股票", len(twse))
+col_b.metric("上櫃股票", len(tpex))
+col_c.metric("總股票數", len(all_codes))
 
 
 if start_scan:
-    if mode == "完整模式：掃描全台股" and not token:
-        st.error("完整模式需要輸入 FinMind Token。")
-        st.stop()
-
-    api = DataLoader()
-
-    if token:
-        api.token = token
-
-    scan_dates = get_recent_trade_dates(scan_days)
+    scan_dates = get_recent_trade_dates(int(scan_days))
     sorted_dates = sorted(scan_dates)
 
     fetch_start = (min(scan_dates) - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -265,16 +335,7 @@ if start_scan:
     st.info(f"掃描日期：{sorted_dates[0]} ～ {sorted_dates[-1]}")
     st.info(f"資料區間：{fetch_start} ～ {fetch_end}")
 
-    with st.spinner("取得股票清單中..."):
-        twse, tpex, all_codes = fetch_all_stock_codes(api)
-
-    if not all_codes:
-        st.error("無法取得股票清單，請確認 FinMind Token 或網路連線。")
-        st.stop()
-
-    st.success(f"上市：{len(twse)} 檔｜上櫃：{len(tpex)} 檔｜合計：{len(all_codes)} 檔")
-
-    if mode == "訪客模式：隨機抽 300 檔":
+    if mode == "訪客模式：隨機抽樣":
         half = int(guest_sample) // 2
 
         sampled = (
@@ -293,11 +354,12 @@ if start_scan:
     st.warning(mode_label)
 
     all_signals, skipped, total_time = run_scan(
-        api=api,
+        token=token,
         sampled=sampled,
         scan_dates=scan_dates,
         fetch_start=fetch_start,
-        fetch_end=fetch_end
+        fetch_end=fetch_end,
+        sleep_sec=float(sleep_sec)
     )
 
     st.subheader("掃描結果")
@@ -329,6 +391,5 @@ if start_scan:
             file_name=f"inside_bar_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
             mime="text/csv"
         )
-
 else:
-    st.info("請在左側選擇模式後，按「開始掃描」。")
+    st.info("設定完成後，請按左側「開始掃描」。")
