@@ -1,9 +1,4 @@
 streamlit
-yfinance
 pandas
-numpy
-matplotlib
 FinMind
-tqdm
-requests
-loguru
+urllib3
