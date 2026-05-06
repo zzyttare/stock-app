@@ -1,6 +1,6 @@
-streamlit
-pandas
-FinMind
-urllib3
-tqdm
-requests
+streamlit==1.32.2
+pandas==2.2.2
+FinMind==1.7.8
+urllib3==2.2.1
+tqdm==4.66.4
+requests==2.31.0
