@@ -1,375 +1,334 @@
-import os
-import numpy as np
+import ssl
+import urllib3
+import logging
+import re
+import time
+import random
+from datetime import datetime, timedelta
+
 import pandas as pd
 import streamlit as st
-import yfinance as yf
-import matplotlib.pyplot as plt
+from FinMind.data import DataLoader
 
-# FinMind 可選載入，避免環境或回應異常時整站掛掉
-try:
-    from FinMind.data import DataLoader
-    FINMIND_IMPORT_OK = True
-except Exception:
-    DataLoader = None
-    FINMIND_IMPORT_OK = False
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+ssl._create_default_https_context = ssl._create_unverified_context
+logging.getLogger("FinMind").setLevel(logging.ERROR)
 
-# ========= 頁面設定 =========
-st.set_page_config(page_title="台股技術分析 App", layout="wide")
-st.title("台股技術分析 App")
+SCAN_TRADE_DAYS = 5
+GUEST_SAMPLE = 300
+TWSE_TYPES = {"twse", "sii"}
+TPEX_TYPES = {"otc", "tpex"}
 
-# ========= Token =========
-MY_TOKEN = os.getenv("FINMIND_TOKEN", "").strip()
 
-# ========= 初始化 =========
-@st.cache_resource
-def init_system():
-    stock_names = {}
-    market_type_map = {}
+def valid_code(code):
+    return bool(re.match(r"^\d{4}$", str(code))) and not str(code).startswith("0")
 
-    if not FINMIND_IMPORT_OK:
-        return None, stock_names, market_type_map, "FinMind 模組載入失敗"
 
-    if not MY_TOKEN:
-        return None, stock_names, market_type_map, "未設定 FINMIND_TOKEN，將使用基本模式"
+@st.cache_data(ttl=3600)
+def fetch_all_stock_codes(_api):
+    info = _api.taiwan_stock_info()
 
-    try:
-        api = DataLoader()
-        api.login_by_token(api_token=MY_TOKEN)
+    if info is None or info.empty:
+        return [], [], []
 
-        df = api.taiwan_stock_info()
+    info.columns = [c.lower() for c in info.columns]
 
-        if df is None or df.empty:
-            return None, stock_names, market_type_map, "FinMind 未回傳股票清單，將使用基本模式"
+    type_col = next((c for c in info.columns if "type" in c), None)
+    id_col = next(
+        (c for c in info.columns if "stock_id" in c or c == "id"),
+        "stock_id"
+    )
 
-        required_cols = {"stock_id", "stock_name"}
-        if not required_cols.issubset(df.columns):
-            return None, stock_names, market_type_map, "FinMind 回傳欄位異常，將使用基本模式"
+    twse, tpex = [], []
 
-        df = df[df["stock_id"].astype(str).str.fullmatch(r"\d{4}")].copy()
-        df["stock_id"] = df["stock_id"].astype(str)
+    if type_col:
+        type_series = info[type_col].astype(str).str.lower()
 
-        market_type_map = {
-            sid: ("上櫃" if int(sid) >= 4000 else "上市")
-            for sid in df["stock_id"]
-        }
-        stock_names = dict(zip(df["stock_id"], df["stock_name"]))
+        twse = list(dict.fromkeys(
+            c for c in info[type_series.isin(TWSE_TYPES)][id_col].astype(str)
+            if valid_code(c)
+        ))
 
-        return api, stock_names, market_type_map, f"FinMind 已連線，載入 {len(stock_names)} 檔股票資料"
+        tpex = list(dict.fromkeys(
+            c for c in info[type_series.isin(TPEX_TYPES)][id_col].astype(str)
+            if valid_code(c)
+        ))
 
-    except Exception as e:
-        return None, stock_names, market_type_map, f"FinMind 初始化失敗：{e}"
+        if len(tpex) == 0:
+            all_types = set(type_series.unique())
+            other_types = all_types - TWSE_TYPES - {"rotc", "roto", "興櫃", "emerg"}
 
-dl, stock_names, market_type_map, finmind_status = init_system()
-
-# ========= 狀態提示 =========
-with st.expander("系統狀態", expanded=False):
-    if dl is not None:
-        st.success(finmind_status)
+            for t in sorted(other_types):
+                cands = [
+                    c for c in info[type_series == t][id_col].astype(str)
+                    if valid_code(c)
+                ]
+                if len(cands) > 100:
+                    tpex = list(dict.fromkeys(cands))
+                    break
     else:
-        st.warning(finmind_status)
-        st.caption("即使 FinMind 不可用，仍可查詢個股價格與技術指標，但股票名稱可能無法顯示。")
+        twse = list(dict.fromkeys(
+            c for c in info[id_col].astype(str)
+            if valid_code(c)
+        ))
+
+    seen = set()
+    twse_clean, tpex_clean = [], []
+
+    for c in twse:
+        if c not in seen:
+            seen.add(c)
+            twse_clean.append(c)
+
+    for c in tpex:
+        if c not in seen:
+            seen.add(c)
+            tpex_clean.append(c)
+
+    all_codes = twse_clean + tpex_clean
+    return twse_clean, tpex_clean, all_codes
 
 
-# ========= 輔助：欄位整理 =========
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+def get_recent_trade_dates(n):
+    dates = set()
+    cursor = datetime.today().date()
+
+    while len(dates) < n:
+        if cursor.weekday() < 5:
+            dates.add(cursor)
+        cursor -= timedelta(days=1)
+
+    return dates
+
+
+def detect_inside_bar(df, stock_id, scan_dates, global_seen):
+    signals = []
+
     df = df.copy()
+    df.columns = [c.lower() for c in df.columns]
+    df.rename(columns={"max": "high", "min": "low"}, inplace=True)
 
-    # MultiIndex 欄位先攤平
-    if isinstance(df.columns, pd.MultiIndex):
-        flat_cols = []
-        for col in df.columns:
-            parts = [str(x) for x in col if str(x) != "" and str(x).lower() != "nan"]
-            # 取第一層可避免 yfinance 把 ticker 也拼進來造成怪欄位
-            flat_cols.append(parts[0] if len(parts) > 0 else "unknown")
-        df.columns = flat_cols
+    for col in ["open", "close", "date"]:
+        if col not in df.columns:
+            return signals
 
-    # 全部轉小寫字串
-    df.columns = [str(c).strip().lower() for c in df.columns]
+    df["date"] = pd.to_datetime(df["date"].astype(str))
+    df = (
+        df.dropna(subset=["open", "close"])
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
 
-    # 常見名稱對應
-    df = df.rename(columns={
-        "adj close": "close",
-        "volume": "vol",
-        "trading_volume": "vol",
-        "datetime": "date",
-    })
+    if len(df) < 2:
+        return signals
 
-    # 如果 index 被 reset 後跑成 index 欄，就當作 date
-    if "date" not in df.columns and "index" in df.columns:
-        df = df.rename(columns={"index": "date"})
+    for i in range(1, len(df)):
+        child = df.iloc[i]
+        mother = df.iloc[i - 1]
 
-    # 若有重複欄名，只保留第一個
-    df = df.loc[:, ~pd.Index(df.columns).duplicated(keep="first")]
+        child_date = child["date"].date()
 
-    return df
+        if child_date not in scan_dates:
+            continue
+
+        key = (stock_id, child_date)
+
+        if key in global_seen:
+            continue
+
+        m_open = float(mother["open"])
+        m_close = float(mother["close"])
+        c_open = float(child["open"])
+        c_close = float(child["close"])
+
+        if any(pd.isna(v) or v <= 0 for v in [m_open, m_close, c_open, c_close]):
+            continue
+
+        m_body_hi = max(m_open, m_close)
+        m_body_lo = min(m_open, m_close)
+        c_body_hi = max(c_open, c_close)
+        c_body_lo = min(c_open, c_close)
+
+        if c_body_hi < m_body_hi and c_body_lo > m_body_lo:
+            global_seen.add(key)
+            signals.append({
+                "股票代號": stock_id,
+                "母線日": mother["date"].strftime("%Y-%m-%d"),
+                "子線日": child["date"].strftime("%Y-%m-%d"),
+                "母實高": round(m_body_hi, 2),
+                "母實低": round(m_body_lo, 2),
+                "子實高": round(c_body_hi, 2),
+                "子實低": round(c_body_lo, 2),
+                "子收": round(c_close, 2),
+            })
+
+    return signals
 
 
-def safe_series(df: pd.DataFrame, col: str):
-    """確保取出的是單一 Series，不是 DataFrame"""
-    if col not in df.columns:
-        return None
+def run_scan(api, sampled, scan_dates, fetch_start, fetch_end):
+    all_signals = []
+    skipped = []
+    global_seen = set()
 
-    obj = df[col]
+    progress_bar = st.progress(0)
+    status_text = st.empty()
 
-    if isinstance(obj, pd.DataFrame):
-        if obj.shape[1] == 0:
-            return None
-        obj = obj.iloc[:, 0]
+    t0 = time.time()
 
-    if not isinstance(obj, pd.Series):
+    for idx, sid in enumerate(sampled, 1):
         try:
-            obj = pd.Series(obj)
+            raw = api.taiwan_stock_daily(
+                stock_id=sid,
+                start_date=fetch_start,
+                end_date=fetch_end,
+            )
+
+            if raw is None or raw.empty:
+                skipped.append(sid)
+            else:
+                sigs = detect_inside_bar(raw, sid, scan_dates, global_seen)
+                all_signals.extend(sigs)
+
         except Exception:
-            return None
+            skipped.append(sid)
 
-    return obj
+        progress_bar.progress(idx / len(sampled))
+        status_text.text(
+            f"掃描進度：{idx}/{len(sampled)}｜目前訊號：{len(all_signals)}｜耗時：{time.time() - t0:.1f} 秒"
+        )
 
+        time.sleep(0.15)
 
-# ========= 技術指標 =========
-def get_indicators(df: pd.DataFrame):
-    if df is None or df.empty or len(df) < 40:
-        return None
-
-    df = normalize_columns(df)
-
-    required = {"open", "high", "low", "close", "vol", "date"}
-    if not required.issubset(df.columns):
-        return None
-
-    date_s = safe_series(df, "date")
-    open_s = safe_series(df, "open")
-    high_s = safe_series(df, "high")
-    low_s = safe_series(df, "low")
-    close_s = safe_series(df, "close")
-    vol_s = safe_series(df, "vol")
-
-    if any(x is None for x in [date_s, open_s, high_s, low_s, close_s, vol_s]):
-        return None
-
-    out = pd.DataFrame({
-        "date": pd.to_datetime(date_s, errors="coerce"),
-        "open": pd.to_numeric(open_s, errors="coerce"),
-        "high": pd.to_numeric(high_s, errors="coerce"),
-        "low": pd.to_numeric(low_s, errors="coerce"),
-        "close": pd.to_numeric(close_s, errors="coerce"),
-        "vol": pd.to_numeric(vol_s, errors="coerce"),
-    })
-
-    out = out.dropna(subset=["date", "close"]).copy()
-
-    if out.empty or len(out) < 40:
-        return None
-
-    close = out["close"]
-    vol = out["vol"]
-
-    out["sma5"] = close.rolling(5).mean()
-    out["sma10"] = close.rolling(10).mean()
-    out["sma20"] = close.rolling(20).mean()
-    out["sma60"] = close.rolling(60).mean()
-
-    std20 = close.rolling(20).std()
-    out["up"] = out["sma20"] + 2 * std20
-    out["dn"] = out["sma20"] - 2 * std20
-    out["bw"] = (out["up"] - out["dn"]) / out["sma20"]
-
-    band_range = out["up"] - out["dn"]
-    out["b_percent"] = np.where(
-        band_range != 0,
-        (close - out["dn"]) / band_range,
-        np.nan
-    )
-    out["b_ma10"] = out["b_percent"].rolling(10).mean()
-
-    out["ema12"] = close.ewm(span=12, adjust=False).mean()
-    out["ema26"] = close.ewm(span=26, adjust=False).mean()
-    out["dif"] = out["ema12"] - out["ema26"]
-    out["dea"] = out["dif"].ewm(span=9, adjust=False).mean()
-
-    out["v_ma5"] = vol.shift(1).rolling(5).mean()
-    out["v_ratio"] = vol / out["v_ma5"].replace(0, np.nan)
-
-    return out
+    return all_signals, skipped, time.time() - t0
 
 
-# ========= 輔助函式 =========
-def guess_market(stock_id: str) -> str:
-    if stock_id in market_type_map:
-        return market_type_map[stock_id]
-    try:
-        return "上市" if int(stock_id) < 4000 else "上櫃"
-    except Exception:
-        return "上市"
+st.set_page_config(
+    page_title="子母懷抱掃描器",
+    layout="wide"
+)
 
+st.title("台股子母懷抱掃描器")
+st.caption("條件：子線實體完全包在母線實體內，只看開盤價與收盤價，不看影線。")
 
-def get_stock_name(stock_id: str) -> str:
-    return stock_names.get(stock_id, "")
-
-
-# ========= 抓單股資料 =========
-@st.cache_data(ttl=300)
-def load_stock_data(stock_id: str, period: str):
-    try:
-        mt = guess_market(stock_id)
-        ticker = f"{stock_id}.TW" if mt == "上市" else f"{stock_id}.TWO"
-
-        df_raw = yf.download(
-            ticker,
-            period=period,
-            progress=False,
-            auto_adjust=False,
-            threads=False,
-            group_by="column",
-        ).reset_index()
-
-        df = get_indicators(df_raw)
-        if df is None or df.empty:
-            return None, f"{ticker} 查無資料或資料不足"
-
-        return df, ""
-    except Exception as e:
-        return None, f"資料下載失敗：{e}"
-
-
-# ========= 側邊欄 =========
 with st.sidebar:
-    st.header("查詢條件")
+    st.header("掃描設定")
 
-    stock_id = st.text_input("股票代號", value="2330").strip()
-
-    period_map = {
-        "6個月": "6mo",
-        "1年": "1y",
-        "2年": "2y",
-    }
-    period_label = st.selectbox("資料期間", list(period_map.keys()), index=2)
-    period = period_map[period_label]
-
-    indicators = st.multiselect(
-        "選擇要顯示的指標",
-        options=[
-            "收盤價", "SMA5", "SMA10", "SMA20", "SMA60",
-            "布林上軌", "布林下軌",
-            "DIF", "DEA",
-            "成交量",
-        ],
-        default=["收盤價", "SMA20", "布林上軌", "布林下軌", "成交量"]
+    mode = st.radio(
+        "執行模式",
+        ["訪客模式：隨機抽 300 檔", "完整模式：掃描全台股"]
     )
 
-    do_query = st.button("開始查詢", use_container_width=True)
+    token = ""
 
-# ========= 查詢 =========
-if do_query:
-    if not stock_id.isdigit() or len(stock_id) != 4:
-        st.warning("請輸入 4 碼股票代號")
-        st.stop()
+    if mode == "完整模式：掃描全台股":
+        token = st.text_input(
+            "FinMind Token",
+            type="password",
+            placeholder="請輸入 FinMind Token"
+        )
 
-    with st.spinner("抓取資料中..."):
-        df, err = load_stock_data(stock_id, period)
-
-    if err:
-        st.error(err)
-        st.stop()
-
-    if df is None or df.empty:
-        st.error("查無資料或資料不足")
-        st.stop()
-
-    stock_name = get_stock_name(stock_id)
-    title_text = f"{stock_id} {stock_name}".strip()
-    st.subheader(title_text)
-
-    # ===== 1. 主價格圖 =====
-    price_cols = []
-    if "收盤價" in indicators:
-        price_cols.append(("close", "收盤價"))
-    if "SMA5" in indicators:
-        price_cols.append(("sma5", "SMA5"))
-    if "SMA10" in indicators:
-        price_cols.append(("sma10", "SMA10"))
-    if "SMA20" in indicators:
-        price_cols.append(("sma20", "SMA20"))
-    if "SMA60" in indicators:
-        price_cols.append(("sma60", "SMA60"))
-    if "布林上軌" in indicators:
-        price_cols.append(("up", "布林上軌"))
-    if "布林下軌" in indicators:
-        price_cols.append(("dn", "布林下軌"))
-
-    if price_cols:
-        fig, ax = plt.subplots(figsize=(14, 6))
-        for col, label in price_cols:
-            if col in df.columns:
-                ax.plot(df["date"], df[col], label=label)
-
-        ax.set_title(f"{stock_id} 價格與均線/布林通道")
-        ax.set_xlabel("日期")
-        ax.set_ylabel("價格")
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        st.pyplot(fig)
-        plt.close(fig)
-
-    # ===== 2. MACD 圖 =====
-    if ("DIF" in indicators) or ("DEA" in indicators):
-        fig2, ax2 = plt.subplots(figsize=(14, 4))
-        has_macd = False
-
-        if "DIF" in indicators and "dif" in df.columns:
-            ax2.plot(df["date"], df["dif"], label="DIF")
-            has_macd = True
-        if "DEA" in indicators and "dea" in df.columns:
-            ax2.plot(df["date"], df["dea"], label="DEA")
-            has_macd = True
-
-        if has_macd:
-            ax2.axhline(0, linewidth=1)
-            ax2.set_title("MACD")
-            ax2.set_xlabel("日期")
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
-            st.pyplot(fig2)
-        plt.close(fig2)
-
-    # ===== 3. 成交量圖 =====
-    if "成交量" in indicators and "vol" in df.columns:
-        fig3, ax3 = plt.subplots(figsize=(14, 4))
-        ax3.bar(df["date"], df["vol"] / 1000)
-        ax3.set_title("成交量（張）")
-        ax3.set_xlabel("日期")
-        ax3.set_ylabel("張")
-        ax3.grid(True, alpha=0.3)
-        st.pyplot(fig3)
-        plt.close(fig3)
-
-    # ===== 4. 顯示表格 =====
-    show_cols = ["date", "open", "high", "low", "close", "vol"]
-
-    mapping = {
-        "SMA5": "sma5",
-        "SMA10": "sma10",
-        "SMA20": "sma20",
-        "SMA60": "sma60",
-        "布林上軌": "up",
-        "布林下軌": "dn",
-        "DIF": "dif",
-        "DEA": "dea",
-    }
-
-    for k, v in mapping.items():
-        if k in indicators and v in df.columns and v not in show_cols:
-            show_cols.append(v)
-
-    show_df = df[show_cols].copy()
-    show_df["date"] = show_df["date"].dt.strftime("%Y-%m-%d")
-
-    st.dataframe(show_df, use_container_width=True)
-
-    csv_data = show_df.to_csv(index=False).encode("utf-8-sig")
-    st.download_button(
-        "下載目前表格 CSV",
-        data=csv_data,
-        file_name=f"{stock_id}_analysis.csv",
-        mime="text/csv",
-        use_container_width=True,
+    scan_days = st.number_input(
+        "掃描近幾個交易日",
+        min_value=1,
+        max_value=20,
+        value=SCAN_TRADE_DAYS,
+        step=1
     )
+
+    guest_sample = st.number_input(
+        "訪客模式抽樣檔數",
+        min_value=50,
+        max_value=1000,
+        value=GUEST_SAMPLE,
+        step=50
+    )
+
+    start_scan = st.button("開始掃描", type="primary")
+
+
+if start_scan:
+    if mode == "完整模式：掃描全台股" and not token:
+        st.error("完整模式需要輸入 FinMind Token。")
+        st.stop()
+
+    api = DataLoader()
+
+    if token:
+        api.token = token
+
+    scan_dates = get_recent_trade_dates(scan_days)
+    sorted_dates = sorted(scan_dates)
+
+    fetch_start = (min(scan_dates) - timedelta(days=7)).strftime("%Y-%m-%d")
+    fetch_end = max(scan_dates).strftime("%Y-%m-%d")
+
+    st.info(f"掃描日期：{sorted_dates[0]} ～ {sorted_dates[-1]}")
+    st.info(f"資料區間：{fetch_start} ～ {fetch_end}")
+
+    with st.spinner("取得股票清單中..."):
+        twse, tpex, all_codes = fetch_all_stock_codes(api)
+
+    if not all_codes:
+        st.error("無法取得股票清單，請確認 FinMind Token 或網路連線。")
+        st.stop()
+
+    st.success(f"上市：{len(twse)} 檔｜上櫃：{len(tpex)} 檔｜合計：{len(all_codes)} 檔")
+
+    if mode == "訪客模式：隨機抽 300 檔":
+        half = int(guest_sample) // 2
+
+        sampled = (
+            random.sample(twse, min(half, len(twse))) +
+            random.sample(tpex, min(half, len(tpex)))
+        )
+
+        sampled = list(dict.fromkeys(sampled))
+        random.shuffle(sampled)
+
+        mode_label = f"訪客模式：隨機抽 {len(sampled)} 檔"
+    else:
+        sampled = all_codes
+        mode_label = f"完整模式：掃描 {len(sampled)} 檔"
+
+    st.warning(mode_label)
+
+    all_signals, skipped, total_time = run_scan(
+        api=api,
+        sampled=sampled,
+        scan_dates=scan_dates,
+        fetch_start=fetch_start,
+        fetch_end=fetch_end
+    )
+
+    st.subheader("掃描結果")
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("實際掃描", len(sampled) - len(skipped))
+    col2.metric("訊號數", len(all_signals))
+    col3.metric("耗時秒數", f"{total_time:.1f}")
+
+    if skipped:
+        st.caption(f"跳過無資料或失敗股票：{len(skipped)} 檔")
+
+    if not all_signals:
+        st.info("本次掃描無訊號。")
+    else:
+        result_df = (
+            pd.DataFrame(all_signals)
+            .sort_values(["子線日", "股票代號"], ascending=[False, True])
+            .reset_index(drop=True)
+        )
+
+        st.dataframe(result_df, use_container_width=True)
+
+        csv = result_df.to_csv(index=False, encoding="utf-8-sig")
+
+        st.download_button(
+            label="下載 CSV",
+            data=csv.encode("utf-8-sig"),
+            file_name=f"inside_bar_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv"
+        )
+
+else:
+    st.info("請在左側選擇模式後，按「開始掃描」。")
