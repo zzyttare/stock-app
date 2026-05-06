@@ -301,6 +301,8 @@ if verify_token:
             st.success("Token 驗證成功，股票清單已載入。")
             st.info(f"上市：{len(twse)} 檔｜上櫃：{len(tpex)} 檔｜合計：{len(all_codes)} 檔")
 
+            st.rerun()
+
         except Exception as e:
             st.session_state["token_verified"] = False
             st.error(f"驗證失敗：{e}")
