@@ -500,42 +500,15 @@ col_a.metric("上市股票", len(twse))
 col_b.metric("上櫃股票", len(tpex))
 col_c.metric("總股票數", len(all_codes))
 
-page = st.tabs(["單檔技術分析", "子母懷抱掃描", "純吞噬型態掃描"])
 
-# ── Tab 1：單檔技術分析 ──
-with page[0]:
-    st.subheader("單檔技術分析")
-    st.caption("輸入股票代號，查詢近兩年資料，計算 MA、布林通道、MACD 與狀態訊號。")
-
-    c1, c2 = st.columns([1, 3])
-    with c1:
-        stock_id = st.text_input("股票代號", value="2330", max_chars=4)
-        run_single = st.button("開始分析", type="primary")
-
-    if run_single:
-        if not valid_code(stock_id):
-            st.error("請輸入正確 4 碼台股股票代號。")
-        else:
-            with st.spinner(f"正在取得 {stock_id} 近四年資料並輸出近兩年分析..."):
-                try:
-                    df = fetch_and_analyze_stock(stock_id, token)
-                    display_df = format_analysis_df(df)
-
-                    st.metric("資料筆數", len(display_df))
-                    st.dataframe(display_df, use_container_width=True, height=600)
-
-                    latest = display_df.iloc[0]
-                    st.info(f"最新日期：{latest['日期']}｜收盤：{latest['收盤']}｜狀態：{latest['狀態']}")
-
-                    csv = display_df.to_csv(index=False, encoding="utf-8-sig")
-                    st.download_button(
-                        "下載單檔分析 CSV",
-                        data=csv.encode("utf-8-sig"),
-                        file_name=f"{stock_id}_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                        mime="text/csv"
-                    )
-                except Exception as e:
-                    st.error(f"分析失敗：{e}")
+with st.sidebar:
+    st.divider()
+    st.header("功能選擇")
+    page_choice = st.radio(
+        "請選擇功能",
+        ["單檔技術分析", "子母懷抱掃描", "純吞噬型態掃描"],
+        index=0
+    )
 
 # ── 掃描設定共用函式 ──
 def render_scan_settings(key_prefix: str):
@@ -588,8 +561,41 @@ def prepare_scan_dates(scan_days: int):
     return scan_dates, sorted_dates, fetch_start, fetch_end
 
 
-# ── Tab 2：子母懷抱掃描 ──
-with page[1]:
+if page_choice == "單檔技術分析":
+    st.subheader("單檔技術分析")
+    st.caption("輸入股票代號，查詢近兩年資料，計算 MA、布林通道、MACD 與狀態訊號。")
+
+    c1, c2 = st.columns([1, 3])
+    with c1:
+        stock_id = st.text_input("股票代號", value="2330", max_chars=4)
+        run_single = st.button("開始分析", type="primary")
+
+    if run_single:
+        if not valid_code(stock_id):
+            st.error("請輸入正確 4 碼台股股票代號。")
+        else:
+            with st.spinner(f"正在取得 {stock_id} 近四年資料並輸出近兩年分析..."):
+                try:
+                    df = fetch_and_analyze_stock(stock_id, token)
+                    display_df = format_analysis_df(df)
+
+                    st.metric("資料筆數", len(display_df))
+                    st.dataframe(display_df, use_container_width=True, height=600)
+
+                    latest = display_df.iloc[0]
+                    st.info(f"最新日期：{latest['日期']}｜收盤：{latest['收盤']}｜狀態：{latest['狀態']}")
+
+                    csv = display_df.to_csv(index=False, encoding="utf-8-sig")
+                    st.download_button(
+                        "下載單檔分析 CSV",
+                        data=csv.encode("utf-8-sig"),
+                        file_name=f"{stock_id}_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                        mime="text/csv"
+                    )
+                except Exception as e:
+                    st.error(f"分析失敗：{e}")
+
+elif page_choice == "子母懷抱掃描":
     st.subheader("子母懷抱掃描")
     st.caption("條件：子線實體完全包在母線實體內，只看開盤價與收盤價，不看影線。")
 
@@ -628,8 +634,7 @@ with page[1]:
                 mime="text/csv"
             )
 
-# ── Tab 3：純吞噬型態掃描 ──
-with page[2]:
+elif page_choice == "純吞噬型態掃描":
     st.subheader("純吞噬型態掃描")
     st.caption("條件：今日 K 線實體嚴格吞噬昨日 K 線實體；多頭吞噬為昨陰今陽，空頭吞噬為昨陽今陰。")
 
@@ -659,7 +664,6 @@ with page[2]:
             st.info("本次掃描無訊號。")
         else:
             result_df = pd.DataFrame(signals).sort_values(["今日", "型態", "股票代號"], ascending=[False, True, True]).reset_index(drop=True)
-
             bull = result_df[result_df["型態"] == "多頭吞噬"]
             bear = result_df[result_df["型態"] == "空頭吞噬"]
 
