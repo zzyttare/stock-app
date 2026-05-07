@@ -1,7 +1,7 @@
 streamlit
 pandas
 numpy
-FinMind
 urllib3
 requests
 plotly
+FinMind==1.6.13
