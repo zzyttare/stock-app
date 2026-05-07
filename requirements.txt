@@ -3,3 +3,5 @@ pandas
 numpy
 FinMind
 urllib3
+requests
+plotly
