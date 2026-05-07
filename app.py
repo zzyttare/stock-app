@@ -22,6 +22,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from FinMind.data import DataLoader
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # ─────────────────────────── 基本設定 ───────────────────────────
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -234,7 +236,7 @@ def fetch_and_analyze_stock(stock_id: str, token: str = "") -> pd.DataFrame:
     df["pct_chg"] = df["close"].pct_change() * 100
     df["bb_upper"], df["bb_lower"] = calc_bollinger(df["close"])
 
-    for n in [5, 10, 15, 60, 120, 240]:
+    for n in [5, 10, 15, 20, 60, 120, 240]:
         df[f"ma{n}"] = calc_ma(df["close"], n)
 
     df["macd"], df["signal_line"], df["histogram"] = calc_macd(df["close"])
@@ -271,6 +273,142 @@ def format_analysis_df(df: pd.DataFrame) -> pd.DataFrame:
     out = out.rename(columns=col_map)
     out = out.iloc[::-1].reset_index(drop=True)
     return out
+
+
+
+
+def render_single_stock_charts(df: pd.DataFrame, stock_id: str):
+    """單檔技術分析圖表：K線 + 均線 + 布林、成交量、MACD。"""
+    chart_df = df.copy().sort_values("date").reset_index(drop=True)
+
+    fig_price = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.72, 0.28],
+        specs=[[{"secondary_y": False}], [{"secondary_y": False}]],
+    )
+
+    fig_price.add_trace(
+        go.Candlestick(
+            x=chart_df["date"],
+            open=chart_df["open"],
+            high=chart_df["high"],
+            low=chart_df["low"],
+            close=chart_df["close"],
+            name="K線",
+            increasing_line_color="#e74c3c",
+            decreasing_line_color="#2ecc71",
+            increasing_fillcolor="#e74c3c",
+            decreasing_fillcolor="#2ecc71",
+        ),
+        row=1,
+        col=1,
+    )
+
+    for ma_col, label in [
+        ("ma5", "MA5"),
+        ("ma10", "MA10"),
+        ("ma20", "MA20"),
+        ("ma60", "MA60"),
+        ("ma120", "MA120"),
+        ("ma240", "MA240"),
+    ]:
+        if ma_col in chart_df.columns:
+            fig_price.add_trace(
+                go.Scatter(
+                    x=chart_df["date"],
+                    y=chart_df[ma_col],
+                    mode="lines",
+                    name=label,
+                    line=dict(width=1.2),
+                ),
+                row=1,
+                col=1,
+            )
+
+    fig_price.add_trace(
+        go.Scatter(
+            x=chart_df["date"],
+            y=chart_df["bb_upper"],
+            mode="lines",
+            name="布林上軌",
+            line=dict(width=1, dash="dot"),
+        ),
+        row=1,
+        col=1,
+    )
+    fig_price.add_trace(
+        go.Scatter(
+            x=chart_df["date"],
+            y=chart_df["bb_lower"],
+            mode="lines",
+            name="布林下軌",
+            line=dict(width=1, dash="dot"),
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig_price.add_trace(
+        go.Bar(
+            x=chart_df["date"],
+            y=chart_df["volume_k"],
+            name="成交量(張)",
+            opacity=0.45,
+        ),
+        row=2,
+        col=1,
+    )
+
+    fig_price.update_layout(
+        title=f"{stock_id} K線 / 均線 / 布林通道 / 成交量",
+        height=720,
+        xaxis_rangeslider_visible=False,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(l=20, r=20, t=70, b=20),
+    )
+    fig_price.update_yaxes(title_text="價格", row=1, col=1)
+    fig_price.update_yaxes(title_text="成交量(張)", row=2, col=1)
+    st.plotly_chart(fig_price, use_container_width=True)
+
+    fig_macd = make_subplots(rows=1, cols=1)
+    fig_macd.add_trace(
+        go.Bar(
+            x=chart_df["date"],
+            y=chart_df["histogram"],
+            name="Histogram",
+            opacity=0.55,
+        )
+    )
+    fig_macd.add_trace(
+        go.Scatter(
+            x=chart_df["date"],
+            y=chart_df["macd"],
+            mode="lines",
+            name="MACD",
+            line=dict(width=1.5),
+        )
+    )
+    fig_macd.add_trace(
+        go.Scatter(
+            x=chart_df["date"],
+            y=chart_df["signal_line"],
+            mode="lines",
+            name="Signal",
+            line=dict(width=1.5),
+        )
+    )
+    fig_macd.update_layout(
+        title=f"{stock_id} MACD",
+        height=360,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(l=20, r=20, t=60, b=20),
+    )
+    st.plotly_chart(fig_macd, use_container_width=True)
 
 
 # ─────────────────────────── 子母懷抱掃描 ───────────────────────────
@@ -580,10 +718,28 @@ if page_choice == "單檔技術分析":
                     display_df = format_analysis_df(df)
 
                     st.metric("資料筆數", len(display_df))
-                    st.dataframe(display_df, use_container_width=True, height=600)
+
+                    st.subheader("技術分析圖表")
+                    chart_range = st.radio(
+                        "圖表顯示範圍",
+                        ["近 3 個月", "近 6 個月", "近 1 年", "近 2 年"],
+                        horizontal=True,
+                        index=2,
+                    )
+                    range_days = {
+                        "近 3 個月": 90,
+                        "近 6 個月": 180,
+                        "近 1 年": 365,
+                        "近 2 年": 730,
+                    }[chart_range]
+                    chart_df = df[df["date"] >= df["date"].max() - pd.Timedelta(days=range_days)].copy()
+                    render_single_stock_charts(chart_df, stock_id)
 
                     latest = display_df.iloc[0]
                     st.info(f"最新日期：{latest['日期']}｜收盤：{latest['收盤']}｜狀態：{latest['狀態']}")
+
+                    st.subheader("分析資料表")
+                    st.dataframe(display_df, use_container_width=True, height=600)
 
                     csv = display_df.to_csv(index=False, encoding="utf-8-sig")
                     st.download_button(
