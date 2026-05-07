@@ -1,0 +1,5 @@
+streamlit
+pandas
+numpy
+FinMind
+urllib3
