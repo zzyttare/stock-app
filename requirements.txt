@@ -5,4 +5,4 @@ urllib3
 requests
 plotly
 setuptools
-FinMind==1.6.13
+FinMind==1.9.10
