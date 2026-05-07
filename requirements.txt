@@ -5,4 +5,5 @@ urllib3
 requests
 plotly
 setuptools
+tqdm
 FinMind==1.9.10
