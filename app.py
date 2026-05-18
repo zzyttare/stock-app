@@ -141,6 +141,25 @@ def is_finmind_rate_limit_error(error: Exception) -> bool:
         "rate limit",
         "request limit",
         "429",
+        "ip banned",
+        "banned",
+        "forbidden",
+        "blocked",
+        "ban",
+    ]
+    return any(k in msg for k in keywords)
+
+
+def is_finmind_ip_banned_error(error: Exception) -> bool:
+    """
+    判斷是否為 FinMind API IP 被暫時封鎖。
+    """
+    msg = str(error).lower()
+    keywords = [
+        "ip banned",
+        "banned",
+        "ip ban",
+        "blocked",
     ]
     return any(k in msg for k in keywords)
 
@@ -149,7 +168,13 @@ def show_finmind_error(error: Exception, prefix: str = "操作失敗") -> None:
     """
     將 FinMind 常見錯誤轉成使用者看得懂的 Streamlit 訊息。
     """
-    if is_finmind_rate_limit_error(error):
+    if is_finmind_ip_banned_error(error):
+        st.error("FinMind 暫時封鎖目前 IP，請一小時後再試。")
+        st.info(
+            "可能原因：短時間請求過於頻繁、重複掃描太多股票，或 API 間隔秒數太低。"
+            "建議先停止操作，稍後再試；恢復後請把 API 間隔調高，例如 0.8～1.5 秒。"
+        )
+    elif is_finmind_rate_limit_error(error):
         st.error("請求過於頻繁，請一小時後再試。")
         st.info(
             "建議：降低掃描檔數、提高 API 間隔秒數，或使用有效 FinMind Token。"
@@ -204,7 +229,10 @@ def common_token_panel():
 
             except Exception as e:
                 st.session_state["stock_list_loaded"] = False
-                if is_finmind_rate_limit_error(e):
+                if is_finmind_ip_banned_error(e):
+                    st.sidebar.error("FinMind 暫時封鎖目前 IP，請一小時後再試。")
+                    st.sidebar.info("建議先停止操作；恢復後把 API 間隔秒數調高，例如 0.8～1.5 秒。")
+                elif is_finmind_rate_limit_error(e):
                     st.sidebar.error("請求過於頻繁，請一小時後再試。")
                     st.sidebar.info("建議降低操作頻率，或使用有效 FinMind Token。")
                 else:
@@ -788,6 +816,17 @@ def run_pattern_scan(token: str, sampled: list, scan_dates: set, fetch_start: st
 
         except Exception as e:
             skipped.append(sid)
+
+            if is_finmind_ip_banned_error(e):
+                st.error("FinMind 暫時封鎖目前 IP，請一小時後再試。")
+                st.info(
+                    "系統已停止本次掃描，避免繼續觸發 FinMind API 封鎖。"
+                    "建議恢復後把 API 間隔秒數調高，例如 0.8～1.5 秒，並降低抽樣檔數。"
+                )
+                status_text.text(
+                    f"掃描已中止：FinMind 暫時封鎖目前 IP｜進度：{idx}/{total}｜目前訊號：{len(all_signals)}"
+                )
+                break
 
             if is_finmind_rate_limit_error(e):
                 st.error("請求過於頻繁，請一小時後再試。")
