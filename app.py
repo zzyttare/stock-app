@@ -897,193 +897,235 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-
-/* ===== 主背景 ===== */
-.stApp {
-    background:
-        linear-gradient(
-            180deg,
-            #0e1117 0%,
-            #0b0d12 100%
-        );
-
-    color: #f0f2f6;
+:root {
+    --bg: #ffffff;
+    --sidebar: #f6f8fb;
+    --panel: #ffffff;
+    --panel-soft: #f9fafc;
+    --line: #d9e1ec;
+    --text: #111827;
+    --muted: #6b7280;
+    --blue: #2f80ed;
+    --red: #e53935;
+    --green: #16a34a;
+    --amber: #f5b429;
 }
 
-/* ===== 主內容 ===== */
+.stApp {
+    background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+    color: var(--text);
+}
+
 .block-container {
-    padding-top: 2rem;
+    max-width: 1520px;
+    padding-top: 1.4rem;
     padding-bottom: 4rem;
 }
 
-/* ===== Sidebar ===== */
+/* sidebar */
 section[data-testid="stSidebar"] {
-    background:
-        linear-gradient(
-            180deg,
-            #11151c 0%,
-            #0d1015 100%
-        );
-
-    border-right: 1px solid rgba(255,255,255,0.06);
+    background: linear-gradient(180deg, #f7f9fc 0%, #eef3f8 100%);
+    border-right: 1px solid #d8e0ea;
 }
 
-/* ===== 標題 ===== */
-.main-title {
-    font-size: 42px;
+section[data-testid="stSidebar"] * {
+    color: #111827;
+}
+
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3 {
+    color: #111827;
     font-weight: 800;
-    color: #f0c674;
-    margin-bottom: 5px;
+}
+
+/* title */
+.main-title {
+    font-size: 38px;
+    font-weight: 900;
+    color: #111827;
+    letter-spacing: 0.5px;
+    margin-bottom: 2px;
 }
 
 .sub-title {
-    color: #9aa4b2;
-    font-size: 17px;
+    color: #4b5563;
+    font-size: 15px;
     margin-bottom: 20px;
 }
 
-/* ===== 按鈕 ===== */
-.stButton > button {
-    background:
-        linear-gradient(
-            90deg,
-            #d6a84f 0%,
-            #f0c674 100%
-        );
+/* card feel */
+div[data-testid="stVerticalBlock"] > div:has(> div[data-testid="stMetric"]) {
+    gap: 1rem;
+}
 
-    color: black;
-    border: none;
-    border-radius: 10px;
+[data-testid="stMetric"] {
+    background: #ffffff;
+    border: 1px solid #dce3ec;
+    border-radius: 14px;
+    padding: 16px 18px;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
+}
+
+[data-testid="stMetricLabel"] {
+    color: #6b7280 !important;
     font-weight: 700;
-    height: 44px;
+}
+
+[data-testid="stMetricValue"] {
+    color: #1f2937 !important;
+    font-weight: 800;
+}
+
+/* buttons */
+.stButton > button {
+    background: #ffffff;
+    color: #1f2937;
+    border: 1px solid #d7dee9;
+    border-radius: 9px;
+    font-weight: 700;
+    min-height: 38px;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
 }
 
 .stButton > button:hover {
-    background:
-        linear-gradient(
-            90deg,
-            #f0c674 0%,
-            #ffd98a 100%
-        );
+    border: 1px solid #e53935;
+    color: #e53935;
+    background: #fff7f7;
 }
 
-/* ===== Input ===== */
+.stButton > button[kind="primary"],
+.stButton > button[data-testid="baseButton-primary"] {
+    background: linear-gradient(180deg, #ef4444 0%, #dc2626 100%);
+    color: #ffffff;
+    border: 1px solid #dc2626;
+}
+
+.stDownloadButton > button {
+    background: #ffffff;
+    color: #1f2937;
+    border: 1px solid #d7dee9;
+    border-radius: 9px;
+    font-weight: 700;
+}
+
+.stDownloadButton > button:hover {
+    background: #f8fafc;
+    border-color: #94a3b8;
+}
+
+/* inputs */
 .stTextInput input,
 .stNumberInput input {
-    background-color: #1a1f27 !important;
-    color: white !important;
-    border: 1px solid #343b46 !important;
+    background-color: #ffffff !important;
+    color: #111827 !important;
+    border: 1px solid #cfd8e3 !important;
+    border-radius: 8px !important;
 }
 
-/* ===== SelectBox ===== */
 .stSelectbox div[data-baseweb="select"] {
-    background-color: #1a1f27;
+    background-color: #ffffff;
+    border-radius: 8px;
 }
 
-/* ===== dataframe ===== */
-[data-testid="stDataFrame"] {
-    background-color: #12161d;
+.stTextInput label,
+.stNumberInput label,
+.stSelectbox label,
+.stRadio label {
+    color: #111827 !important;
+    font-weight: 700;
+}
+
+/* alert */
+.stAlert {
     border-radius: 12px;
-    border: 1px solid rgba(255,255,255,0.06);
+    border: 1px solid #dde7f3;
+    background: #f8fbff;
 }
 
-/* ===== metric ===== */
-[data-testid="metric-container"] {
-    background: #151a22;
-    border: 1px solid rgba(255,255,255,0.06);
-    padding: 14px;
+/* dataframe */
+[data-testid="stDataFrame"] {
+    background: #ffffff;
     border-radius: 14px;
+    border: 1px solid #dce3ec;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
 }
 
-/* ===== expander ===== */
+/* expander */
+div[data-testid="stExpander"] {
+    border: 1px solid #dce3ec;
+    border-radius: 14px;
+    background: #ffffff;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.03);
+}
+
 .streamlit-expanderHeader {
-    background-color: #151922;
-    border-radius: 10px;
+    background-color: #ffffff;
+    color: #111827 !important;
+    border-radius: 12px;
+    font-weight: 800;
 }
 
-/* ===== tabs ===== */
-.stTabs [data-baseweb="tab"] {
-    color: #cfd6df;
+/* divider */
+hr {
+    border-color: #e5eaf1;
 }
 
-.stTabs [aria-selected="true"] {
-    color: #f0c674 !important;
-}
-
-/* ===== 左下角警語 ===== */
+/* compact note box inside sidebar lower area */
 .warning-box {
-
     position: fixed;
-
-    left: 16px;
-    bottom: 16px;
-
-    width: 250px;
-
-    background:
-        rgba(18,22,28,0.88);
-
-    backdrop-filter: blur(10px);
-
-    border: 1px solid rgba(240,198,116,0.35);
-
-    border-radius: 16px;
-
-    padding: 14px;
-
+    left: 18px;
+    bottom: 18px;
+    width: 285px;
+    max-height: 270px;
+    overflow-y: auto;
+    background: linear-gradient(180deg, #fffdf6 0%, #fff8e8 100%);
+    border: 1px solid #f2c14e;
+    border-radius: 12px;
+    padding: 12px 14px;
     z-index: 999999;
-
-    box-shadow:
-        0 0 18px rgba(0,0,0,0.25);
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.10);
 }
 
-/* ===== 標題 ===== */
 .warning-title {
-    color: #f0c674;
-    font-size: 18px;
-    font-weight: 800;
-    margin-bottom: 10px;
+    color: #b7791f;
+    font-size: 15px;
+    font-weight: 900;
+    margin-bottom: 6px;
 }
 
-/* ===== 內容 ===== */
 .warning-text {
-    color: #d8dee9;
-    font-size: 12px;
-    line-height: 1.7;
+    color: #374151;
+    font-size: 11px;
+    line-height: 1.55;
 }
 
-/* ===== 建議參數 ===== */
 .param-title {
-    color: #f0c674;
-    font-size: 16px;
-    font-weight: 800;
-    margin-top: 12px;
-    margin-bottom: 8px;
+    color: #b7791f;
+    font-size: 13px;
+    font-weight: 900;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(245,180,41,0.35);
 }
 
-/* ===== 參數內容 ===== */
 .param-text {
-    color: #d8dee9;
-    font-size: 12px;
-    line-height: 1.7;
+    color: #374151;
+    font-size: 11px;
+    line-height: 1.55;
 }
 
-/* ===== 手機 ===== */
 @media (max-width: 1000px) {
-
     .warning-box {
-
         position: relative;
-
-        width: 100%;
-
         left: auto;
         bottom: auto;
-
-        margin-top: 20px;
+        width: auto;
+        max-height: none;
+        margin-top: 16px;
     }
 }
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -1096,20 +1138,16 @@ st.markdown("""
 <div class="warning-box">
   <div class="warning-title">⚠ 注意事項</div>
   <div class="warning-text">
-    若 FinMind API 權限等級不足、超過 request 限制或頻率過高，可能出現：<br>
-    • 掃描不完全<br>
+    若 FinMind API 權限不足、request 過高或頻率過快，可能出現：<br>
+    • 掃描不完整<br>
     • 部分股票無資料<br>
-    • 掃描速度變慢<br>
-    • API 限流<br>
-    • 暫時性失敗
+    • API 限流或暫時失敗
   </div>
   <div class="param-title">⚙ 建議參數</div>
   <div class="param-text">
-    • 訪客模式（抽樣）：0.15 ～ 0.30 秒<br>
-    • 完整模式（全台股）：0.30 ～ 0.80 秒<br>
-    • 免費 Token：建議 ≥ 0.50 秒<br>
-    • 若頻繁失敗，請提高 API 間隔秒數<br>
-    • 完整掃描建議使用有效 Token
+    • 訪客模式：0.15 ~ 0.30 秒<br>
+    • 完整模式：0.30 ~ 0.80 秒<br>
+    • 免費 Token：建議 ≥ 0.50 秒
   </div>
 </div>
 """, unsafe_allow_html=True)
