@@ -888,9 +888,239 @@ def render_scan_common(token: str, twse: list, tpex: list, all_codes: list, scan
 # ============================================================
 # Streamlit 入口
 # ============================================================
-st.set_page_config(page_title="台股技術分析整合工具", layout="wide")
-st.title("台股技術分析整合工具")
-st.caption("整合單檔技術分析、子母懷抱、吞噬型態、布林收斂擴張掃描。")
+st.set_page_config(
+    page_title="台股技術分析掃描器",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown("""
+<style>
+:root {
+    --gold: #f3c969;
+    --gold2: #d6a93e;
+    --bg: #050505;
+    --panel: #0d0d0d;
+    --panel2: #111111;
+    --line: #343434;
+    --text: #f2f2f2;
+    --muted: #b8b8b8;
+}
+
+.stApp {
+    background:
+        radial-gradient(circle at 18% 8%, rgba(243,201,105,0.09), transparent 26%),
+        radial-gradient(circle at 82% 0%, rgba(214,169,62,0.08), transparent 24%),
+        linear-gradient(180deg, #050505 0%, #080808 45%, #020202 100%);
+    color: var(--text);
+}
+
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 8rem;
+}
+
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #090909 0%, #101010 55%, #060606 100%);
+    border-right: 1px solid rgba(243,201,105,0.22);
+}
+
+section[data-testid="stSidebar"] * {
+    color: #eeeeee;
+}
+
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3 {
+    color: var(--gold);
+}
+
+.main-title {
+    font-size: 44px;
+    font-weight: 900;
+    color: var(--gold);
+    letter-spacing: 1px;
+    margin-bottom: 2px;
+    text-shadow: 0 0 20px rgba(243,201,105,0.18);
+}
+
+.sub-title {
+    color: var(--muted);
+    font-size: 17px;
+    margin-bottom: 24px;
+}
+
+[data-testid="stMetric"] {
+    background: linear-gradient(180deg, rgba(18,18,18,0.96), rgba(8,8,8,0.96));
+    border: 1px solid rgba(243,201,105,0.22);
+    border-radius: 18px;
+    padding: 16px;
+    box-shadow: 0 0 22px rgba(0,0,0,0.35);
+}
+
+[data-testid="stMetricLabel"] {
+    color: #cfcfcf !important;
+}
+
+[data-testid="stMetricValue"] {
+    color: var(--gold) !important;
+}
+
+.stButton > button {
+    background: linear-gradient(90deg, #b98a22 0%, #f3c969 55%, #ffe39a 100%);
+    color: #111111;
+    border: 0;
+    border-radius: 12px;
+    font-weight: 800;
+    min-height: 42px;
+    box-shadow: 0 0 18px rgba(243,201,105,0.18);
+}
+
+.stButton > button:hover {
+    background: linear-gradient(90deg, #f3c969 0%, #ffe39a 100%);
+    color: #000000;
+    border: 0;
+}
+
+.stDownloadButton > button {
+    background: transparent;
+    color: var(--gold);
+    border: 1px solid rgba(243,201,105,0.48);
+    border-radius: 12px;
+    font-weight: 700;
+}
+
+.stDownloadButton > button:hover {
+    background: rgba(243,201,105,0.12);
+    color: #ffe39a;
+    border: 1px solid rgba(243,201,105,0.8);
+}
+
+.stTextInput input,
+.stNumberInput input {
+    background-color: #0e0e0e !important;
+    color: #ffffff !important;
+    border: 1px solid #3d3d3d !important;
+    border-radius: 10px !important;
+}
+
+.stSelectbox div[data-baseweb="select"],
+.stRadio,
+.stCheckbox {
+    color: #eeeeee !important;
+}
+
+[data-testid="stDataFrame"] {
+    background: #090909;
+    border-radius: 16px;
+    border: 1px solid rgba(243,201,105,0.22);
+    overflow: hidden;
+}
+
+.stAlert {
+    border-radius: 14px;
+}
+
+.streamlit-expanderHeader {
+    background-color: #111111;
+    color: var(--gold) !important;
+    border-radius: 12px;
+    border: 1px solid rgba(243,201,105,0.18);
+}
+
+div[data-testid="stExpander"] {
+    border: 1px solid rgba(243,201,105,0.18);
+    border-radius: 14px;
+    background: rgba(12,12,12,0.9);
+}
+
+hr {
+    border-color: rgba(243,201,105,0.16);
+}
+
+.warning-box {
+    position: fixed;
+    left: 18px;
+    bottom: 18px;
+    width: 330px;
+    max-height: 52vh;
+    overflow-y: auto;
+    background: linear-gradient(180deg, rgba(45,38,13,0.98) 0%, rgba(18,16,9,0.98) 100%);
+    border: 1.8px solid #d6a93e;
+    border-radius: 20px;
+    padding: 18px 20px;
+    z-index: 999999;
+    box-shadow: 0 0 28px rgba(243,201,105,0.20);
+}
+
+.warning-title {
+    color: #ffd76a;
+    font-size: 22px;
+    font-weight: 900;
+    margin-bottom: 10px;
+}
+
+.warning-text {
+    color: #f2f2f2;
+    font-size: 15px;
+    line-height: 1.65;
+}
+
+.param-title {
+    color: #ffd76a;
+    font-size: 19px;
+    font-weight: 900;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(243,201,105,0.28);
+}
+
+.param-text {
+    color: #e8e8e8;
+    font-size: 14px;
+    line-height: 1.75;
+}
+
+@media (max-width: 1100px) {
+    .warning-box {
+        position: relative;
+        left: auto;
+        bottom: auto;
+        width: auto;
+        max-height: none;
+        margin-top: 24px;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="main-title">📈 台股技術分析掃描器</div>
+<div class="sub-title">FinMind API 技術分析工具整合版｜單檔分析・子母懷抱・吞噬型態・布林收斂擴張</div>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div class="warning-box">
+  <div class="warning-title">⚠ 注意事項</div>
+  <div class="warning-text">
+    若 FinMind API 權限等級不足、超過 request 限制或頻率過高，可能出現：<br>
+    • 掃描不完全<br>
+    • 部分股票無資料<br>
+    • 掃描速度變慢<br>
+    • API 限流<br>
+    • 暫時性失敗
+  </div>
+  <div class="param-title">⚙ 建議參數</div>
+  <div class="param-text">
+    • 訪客模式（抽樣）：0.15 ～ 0.30 秒<br>
+    • 完整模式（全台股）：0.30 ～ 0.80 秒<br>
+    • 免費 Token：建議 ≥ 0.50 秒<br>
+    • 若頻繁失敗，請提高 API 間隔秒數<br>
+    • 完整掃描建議使用有效 Token
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 with st.sidebar:
     page = st.selectbox(
