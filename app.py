@@ -129,6 +129,36 @@ def normalize_daily_df(raw: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def is_finmind_rate_limit_error(error: Exception) -> bool:
+    """
+    判斷是否為 FinMind API 請求過於頻繁 / request 上限錯誤。
+    """
+    msg = str(error).lower()
+    keywords = [
+        "requests reach the upper limit",
+        "upper limit",
+        "too many requests",
+        "rate limit",
+        "request limit",
+        "429",
+    ]
+    return any(k in msg for k in keywords)
+
+
+def show_finmind_error(error: Exception, prefix: str = "操作失敗") -> None:
+    """
+    將 FinMind 常見錯誤轉成使用者看得懂的 Streamlit 訊息。
+    """
+    if is_finmind_rate_limit_error(error):
+        st.error("請求過於頻繁，請一小時後再試。")
+        st.info(
+            "建議：降低掃描檔數、提高 API 間隔秒數，或使用有效 FinMind Token。"
+            "訪客模式建議 0.3～0.5 秒；完整模式建議 0.8 秒以上。"
+        )
+    else:
+        st.error(f"{prefix}：{error}")
+
+
 def prepare_sample(mode: str, twse: list, tpex: list, all_codes: list, guest_sample: int):
     if mode == "訪客模式：隨機抽樣":
         half = int(guest_sample) // 2
@@ -174,8 +204,11 @@ def common_token_panel():
 
             except Exception as e:
                 st.session_state["stock_list_loaded"] = False
-                st.sidebar.error("載入股票清單失敗。")
-                st.sidebar.exception(e)
+                if is_finmind_rate_limit_error(e):
+                    st.sidebar.error("請求過於頻繁，請一小時後再試。")
+                    st.sidebar.info("建議降低操作頻率，或使用有效 FinMind Token。")
+                else:
+                    st.sidebar.error(f"載入股票清單失敗：{e}")
                 st.stop()
 
     if not st.session_state["stock_list_loaded"]:
@@ -431,7 +464,7 @@ def render_single_stock_analysis(token: str):
             try:
                 df = fetch_and_analyze_stock(stock_id, token)
             except Exception as e:
-                st.error(f"分析失敗：{e}")
+                show_finmind_error(e, prefix="分析失敗")
                 return
 
         latest = df.iloc[-1]
@@ -753,8 +786,19 @@ def run_pattern_scan(token: str, sampled: list, scan_dates: set, fetch_start: st
                 signals = detector(raw, sid, scan_dates, global_seen, **detector_kwargs)
                 all_signals.extend(signals)
 
-        except Exception:
+        except Exception as e:
             skipped.append(sid)
+
+            if is_finmind_rate_limit_error(e):
+                st.error("請求過於頻繁，請一小時後再試。")
+                st.info(
+                    "系統已停止本次掃描，避免繼續觸發 FinMind API 限流。"
+                    "建議提高 API 間隔秒數，或降低抽樣檔數後再試。"
+                )
+                status_text.text(
+                    f"掃描已中止：FinMind API 請求過於頻繁｜進度：{idx}/{total}｜目前訊號：{len(all_signals)}"
+                )
+                break
 
         progress_bar.progress(idx / total)
         status_text.text(f"掃描進度：{idx}/{total}｜目前訊號：{len(all_signals)}｜耗時：{time.time() - t0:.1f} 秒")
