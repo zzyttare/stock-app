@@ -918,7 +918,7 @@ st.markdown("""
 
 .block-container {
     max-width: 1520px;
-    padding-top: 1.4rem;
+    padding-top: 2.2rem;
     padding-bottom: 4rem;
 }
 
@@ -945,8 +945,22 @@ section[data-testid="stSidebar"] h3 {
     font-weight: 900;
     color: #111827;
     letter-spacing: 0.5px;
-    margin-bottom: 2px;
+    margin-bottom: 6px;
+    line-height: 1.35;
+    padding-top: 8px;
+    overflow: visible;
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
+
+.main-title .title-icon {
+    font-size: 34px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+}
+
 
 .sub-title {
     color: #4b5563;
@@ -1130,7 +1144,7 @@ hr {
 """, unsafe_allow_html=True)
 
 st.markdown("""
-<div class="main-title">📈 台股技術分析掃描器</div>
+<div class="main-title"><span class="title-icon">📈</span><span>台股技術分析掃描器</span></div>
 <div class="sub-title">FinMind API 技術分析工具整合版｜單檔分析・子母懷抱・吞噬型態・布林收斂擴張</div>
 """, unsafe_allow_html=True)
 
