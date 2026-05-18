@@ -1,15 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-台股技術分析整合工具 Streamlit 版
-功能：
-1. 單檔技術分析：MA、布林通道、MACD、狀態判斷
-2. 子母懷抱掃描：子線實體完全包在母線實體內
-3. 純吞噬型態掃描：多頭吞噬 / 空頭吞噬，實體嚴格吞噬
-
-資料來源：FinMind API
-執行：streamlit run app.py
-"""
-
 import ssl
 import urllib3
 import logging
@@ -18,31 +6,35 @@ import time
 import random
 from datetime import datetime, timedelta
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 from FinMind.data import DataLoader
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
-# ─────────────────────────── 基本設定 ───────────────────────────
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ssl._create_default_https_context = ssl._create_unverified_context
 logging.getLogger("FinMind").setLevel(logging.ERROR)
 
-SCAN_TRADE_DAYS = 5
-GUEST_SAMPLE = 300
+DEFAULT_BB_PERIOD = 20
+DEFAULT_BB_STD = 2.0
+DEFAULT_BW_HIST_PERIOD = 60
+DEFAULT_BW_PCT_THRESH = 20
+DEFAULT_SQUEEZE_MIN = 5
+DEFAULT_EXPAND_RATIO = 1.05
+DEFAULT_VOL_RATIO = 1.5
+DEFAULT_SCAN_TRADE_DAYS = 5
+DEFAULT_GUEST_SAMPLE = 300
+DEFAULT_SLEEP_SEC = 0.15
+
 TWSE_TYPES = {"twse", "sii"}
 TPEX_TYPES = {"otc", "tpex"}
 
-# ─────────────────────────── 共用工具 ───────────────────────────
 
 def valid_code(code: str) -> bool:
     code = str(code)
-    return bool(re.match(r"^\d{4}$", code)) and not code.startswith("0")
+    return bool(re.match(r"^\\d{4}$", code)) and not code.startswith("0")
 
 
-def create_api(token: str = "") -> DataLoader:
+def create_api(token: str) -> DataLoader:
     api = DataLoader()
     if token:
         api.token = token
@@ -58,7 +50,6 @@ def fetch_all_stock_codes_cached(token: str):
         return [], [], []
 
     info.columns = [c.lower() for c in info.columns]
-
     type_col = next((c for c in info.columns if "type" in c), None)
     id_col = next((c for c in info.columns if "stock_id" in c or c == "id"), "stock_id")
 
@@ -66,18 +57,15 @@ def fetch_all_stock_codes_cached(token: str):
 
     if type_col:
         type_series = info[type_col].astype(str).str.lower()
-
         twse = list(dict.fromkeys(
             c for c in info[type_series.isin(TWSE_TYPES)][id_col].astype(str)
             if valid_code(c)
         ))
-
         tpex = list(dict.fromkeys(
             c for c in info[type_series.isin(TPEX_TYPES)][id_col].astype(str)
             if valid_code(c)
         ))
 
-        # 有些 FinMind 回傳 type 命名可能不同，若找不到上櫃，嘗試用其他類別補抓
         if len(tpex) == 0:
             all_types = set(type_series.unique())
             other_types = all_types - TWSE_TYPES - {"rotc", "roto", "興櫃", "emerg"}
@@ -90,7 +78,10 @@ def fetch_all_stock_codes_cached(token: str):
                     tpex = list(dict.fromkeys(cands))
                     break
     else:
-        twse = list(dict.fromkeys(c for c in info[id_col].astype(str) if valid_code(c)))
+        twse = list(dict.fromkeys(
+            c for c in info[id_col].astype(str)
+            if valid_code(c)
+        ))
 
     seen = set()
     twse_clean, tpex_clean = [], []
@@ -105,444 +96,181 @@ def fetch_all_stock_codes_cached(token: str):
             seen.add(c)
             tpex_clean.append(c)
 
-    all_codes = twse_clean + tpex_clean
-    return twse_clean, tpex_clean, all_codes
+    return twse_clean, tpex_clean, twse_clean + tpex_clean
 
 
 def get_recent_trade_dates(n: int) -> set:
-    """簡易抓近 n 個平日。遇國定假日仍可能包含非交易日，但抓資料時會自然略過。"""
     dates = set()
     cursor = datetime.today().date()
+
     while len(dates) < n:
         if cursor.weekday() < 5:
             dates.add(cursor)
         cursor -= timedelta(days=1)
+
     return dates
 
 
-def normalize_daily_columns(raw: pd.DataFrame) -> pd.DataFrame:
+def normalize_daily_df(raw: pd.DataFrame) -> pd.DataFrame:
     df = raw.copy()
     df.columns = [c.lower() for c in df.columns]
-    df.rename(columns={"max": "high", "min": "low", "trading_volume": "volume_shares"}, inplace=True)
+    df.rename(
+        columns={
+            "max": "high",
+            "min": "low",
+            "trading_volume": "volume",
+            "trading_money": "amount",
+        },
+        inplace=True,
+    )
     return df
 
 
-# ─────────────────────────── 單檔技術分析 ───────────────────────────
-
-def calc_ma(series: pd.Series, n: int) -> pd.Series:
-    return series.rolling(n, min_periods=n).mean()
-
-
-def calc_ema(series: pd.Series, n: int) -> pd.Series:
-    return series.ewm(span=n, adjust=False, min_periods=n).mean()
-
-
-def calc_bollinger(series: pd.Series, n: int = 20, k: float = 2.0):
-    mid = series.rolling(n, min_periods=n).mean()
-    std = series.rolling(n, min_periods=n).std(ddof=0)
-    upper = mid + k * std
-    lower = mid - k * std
-    return upper, lower
-
-
-def calc_macd(series: pd.Series, fast=12, slow=26, signal=9):
-    ema_fast = calc_ema(series, fast)
-    ema_slow = calc_ema(series, slow)
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False, min_periods=signal).mean()
-    histogram = macd_line - signal_line
-    return macd_line, signal_line, histogram
-
-
-def detect_status(df: pd.DataFrame) -> pd.Series:
-    status_list = []
+def compute_bollinger(
+    df: pd.DataFrame,
+    bb_period: int,
+    bb_std: float,
+    bw_hist_period: int,
+    bw_pct_thresh: float,
+) -> pd.DataFrame:
+    df = df.copy()
     close = df["close"]
-    high = df["high"]
-    low = df["low"]
-
-    ma_cols = ["ma5", "ma10", "ma15", "ma60", "ma120", "ma240"]
-    ma_labels = {
-        "ma5": "MA5", "ma10": "MA10", "ma15": "MA15",
-        "ma60": "MA60", "ma120": "MA120", "ma240": "MA240"
-    }
-
-    for i in range(len(df)):
-        tags = []
-        row = df.iloc[i]
-        prev = df.iloc[i - 1] if i > 0 else None
-
-        if pd.notna(row["bb_upper"]) and high.iloc[i] >= row["bb_upper"]:
-            tags.append("觸布林上軌")
-        if pd.notna(row["bb_lower"]) and low.iloc[i] <= row["bb_lower"]:
-            tags.append("觸布林下軌")
-
-        if prev is not None:
-            if (
-                pd.notna(row["macd"]) and pd.notna(row["signal_line"])
-                and pd.notna(prev["macd"]) and pd.notna(prev["signal_line"])
-            ):
-                if prev["macd"] < prev["signal_line"] and row["macd"] > row["signal_line"]:
-                    tags.append("MACD 金叉")
-                elif prev["macd"] > prev["signal_line"] and row["macd"] < row["signal_line"]:
-                    tags.append("MACD 死叉")
-
-            for mc in ma_cols:
-                if pd.notna(row[mc]) and pd.notna(prev[mc]):
-                    p_close = close.iloc[i - 1]
-                    c_close = close.iloc[i]
-                    if p_close < prev[mc] and c_close > row[mc]:
-                        tags.append(f"{ma_labels[mc]} 金叉")
-                    elif p_close > prev[mc] and c_close < row[mc]:
-                        tags.append(f"{ma_labels[mc]} 死叉")
-
-        ma_vals = [row[mc] for mc in ma_cols]
-        if all(pd.notna(v) for v in ma_vals):
-            if all(ma_vals[j] > ma_vals[j + 1] for j in range(len(ma_vals) - 1)):
-                tags.append("均線多頭排列")
-            elif all(ma_vals[j] < ma_vals[j + 1] for j in range(len(ma_vals) - 1)):
-                tags.append("均線空頭排列")
-
-        status_list.append(" / ".join(tags) if tags else "—")
-
-    return pd.Series(status_list, index=df.index)
+    df["ma"] = close.rolling(bb_period).mean()
+    df["std"] = close.rolling(bb_period).std(ddof=1)
+    df["upper"] = df["ma"] + bb_std * df["std"]
+    df["lower"] = df["ma"] - bb_std * df["std"]
+    df["bw"] = (df["upper"] - df["lower"]) / df["ma"]
+    df["bw_low_thresh"] = (
+        df["bw"].rolling(bw_hist_period).quantile(bw_pct_thresh / 100)
+    )
+    return df
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_and_analyze_stock(stock_id: str, token: str = "") -> pd.DataFrame:
-    today = datetime.today().date()
-    output_start = today - timedelta(days=730)
-    start_date = (today - timedelta(days=1460)).strftime("%Y-%m-%d")
-    end_date = today.strftime("%Y-%m-%d")
+def detect_squeeze(
+    raw: pd.DataFrame,
+    stock_id: str,
+    scan_dates: set,
+    global_seen: set,
+    bb_period: int,
+    bb_std: float,
+    bw_hist_period: int,
+    bw_pct_thresh: float,
+    squeeze_min: int,
+    expand_ratio: float,
+    vol_ratio: float,
+) -> list:
+    signals = []
+    df = normalize_daily_df(raw)
 
-    api = create_api(token)
-    raw = api.taiwan_stock_daily(stock_id=stock_id, start_date=start_date, end_date=end_date)
+    for col in ["open", "close", "date", "volume"]:
+        if col not in df.columns:
+            return signals
 
-    if raw is None or raw.empty:
-        raise ValueError(f"查無資料，請確認股票代號 {stock_id} 或 Token 是否正確。")
+    df["date"] = pd.to_datetime(df["date"].astype(str))
+    df = df.dropna(subset=["open", "close", "volume"]).sort_values("date").reset_index(drop=True)
 
-    raw = normalize_daily_columns(raw)
-    required = ["date", "open", "close", "high", "low", "volume_shares"]
-    missing = [c for c in required if c not in raw.columns]
-    if missing:
-        raise ValueError(f"資料欄位不足：{missing}")
-
-    df = raw[required].copy()
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date").reset_index(drop=True)
-
-    for col in ["open", "close", "high", "low", "volume_shares"]:
+    for col in ["open", "close", "volume"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df["pct_chg"] = df["close"].pct_change() * 100
-    df["bb_upper"], df["bb_lower"] = calc_bollinger(df["close"])
+    df = df.dropna(subset=["open", "close", "volume"]).reset_index(drop=True)
 
-    for n in [5, 10, 15, 20, 60, 120, 240]:
-        df[f"ma{n}"] = calc_ma(df["close"], n)
-
-    df["macd"], df["signal_line"], df["histogram"] = calc_macd(df["close"])
-    df["volume_k"] = (df["volume_shares"] / 1000).round(0).astype("Int64")
-    df["status"] = detect_status(df)
-    df = df[df["date"].dt.date >= output_start].reset_index(drop=True)
-    return df
-
-
-def format_analysis_df(df: pd.DataFrame) -> pd.DataFrame:
-    col_map = {
-        "date": "日期",
-        "open": "開盤",
-        "close": "收盤",
-        "high": "最高",
-        "low": "最低",
-        "pct_chg": "漲跌幅%",
-        "bb_upper": "布林上軌",
-        "bb_lower": "布林下軌",
-        "ma5": "MA5",
-        "ma10": "MA10",
-        "ma15": "MA15",
-        "ma60": "MA60",
-        "ma120": "MA120",
-        "ma240": "MA240",
-        "macd": "MACD",
-        "signal_line": "Signal",
-        "histogram": "Histogram",
-        "volume_k": "成交量(張)",
-        "status": "狀態",
-    }
-    out = df[list(col_map.keys())].copy()
-    out["date"] = out["date"].dt.strftime("%Y-%m-%d")
-    out = out.rename(columns=col_map)
-    out = out.iloc[::-1].reset_index(drop=True)
-    return out
-
-
-
-
-def render_single_stock_charts(df: pd.DataFrame, stock_id: str):
-    """單檔技術分析圖表：K線 + 均線 + 布林、成交量、MACD。"""
-    chart_df = df.copy().sort_values("date").reset_index(drop=True)
-
-    fig_price = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.72, 0.28],
-        specs=[[{"secondary_y": False}], [{"secondary_y": False}]],
-    )
-
-    fig_price.add_trace(
-        go.Candlestick(
-            x=chart_df["date"],
-            open=chart_df["open"],
-            high=chart_df["high"],
-            low=chart_df["low"],
-            close=chart_df["close"],
-            name="K線",
-            increasing_line_color="#e74c3c",
-            decreasing_line_color="#2ecc71",
-            increasing_fillcolor="#e74c3c",
-            decreasing_fillcolor="#2ecc71",
-        ),
-        row=1,
-        col=1,
-    )
-
-    for ma_col, label in [
-        ("ma5", "MA5"),
-        ("ma10", "MA10"),
-        ("ma20", "MA20"),
-        ("ma60", "MA60"),
-        ("ma120", "MA120"),
-        ("ma240", "MA240"),
-    ]:
-        if ma_col in chart_df.columns:
-            fig_price.add_trace(
-                go.Scatter(
-                    x=chart_df["date"],
-                    y=chart_df[ma_col],
-                    mode="lines",
-                    name=label,
-                    line=dict(width=1.2),
-                ),
-                row=1,
-                col=1,
-            )
-
-    fig_price.add_trace(
-        go.Scatter(
-            x=chart_df["date"],
-            y=chart_df["bb_upper"],
-            mode="lines",
-            name="布林上軌",
-            line=dict(width=1, dash="dot"),
-        ),
-        row=1,
-        col=1,
-    )
-    fig_price.add_trace(
-        go.Scatter(
-            x=chart_df["date"],
-            y=chart_df["bb_lower"],
-            mode="lines",
-            name="布林下軌",
-            line=dict(width=1, dash="dot"),
-        ),
-        row=1,
-        col=1,
-    )
-
-    fig_price.add_trace(
-        go.Bar(
-            x=chart_df["date"],
-            y=chart_df["volume_k"],
-            name="成交量(張)",
-            opacity=0.45,
-        ),
-        row=2,
-        col=1,
-    )
-
-    fig_price.update_layout(
-        title=f"{stock_id} K線 / 均線 / 布林通道 / 成交量",
-        height=720,
-        xaxis_rangeslider_visible=False,
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        margin=dict(l=20, r=20, t=70, b=20),
-    )
-    fig_price.update_yaxes(title_text="價格", row=1, col=1)
-    fig_price.update_yaxes(title_text="成交量(張)", row=2, col=1)
-    st.plotly_chart(fig_price, use_container_width=True)
-
-    fig_macd = make_subplots(rows=1, cols=1)
-    fig_macd.add_trace(
-        go.Bar(
-            x=chart_df["date"],
-            y=chart_df["histogram"],
-            name="Histogram",
-            opacity=0.55,
-        )
-    )
-    fig_macd.add_trace(
-        go.Scatter(
-            x=chart_df["date"],
-            y=chart_df["macd"],
-            mode="lines",
-            name="MACD",
-            line=dict(width=1.5),
-        )
-    )
-    fig_macd.add_trace(
-        go.Scatter(
-            x=chart_df["date"],
-            y=chart_df["signal_line"],
-            mode="lines",
-            name="Signal",
-            line=dict(width=1.5),
-        )
-    )
-    fig_macd.update_layout(
-        title=f"{stock_id} MACD",
-        height=360,
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        margin=dict(l=20, r=20, t=60, b=20),
-    )
-    st.plotly_chart(fig_macd, use_container_width=True)
-
-
-# ─────────────────────────── 子母懷抱掃描 ───────────────────────────
-
-def detect_inside_bar(df: pd.DataFrame, stock_id: str, scan_dates: set, global_seen: set) -> list:
-    signals = []
-    df = normalize_daily_columns(df)
-
-    for col in ["open", "close", "date"]:
-        if col not in df.columns:
-            return signals
-
-    df["date"] = pd.to_datetime(df["date"].astype(str))
-    df = df.dropna(subset=["open", "close"]).sort_values("date").reset_index(drop=True)
-
-    if len(df) < 2:
+    if len(df) < bb_period + bw_hist_period:
         return signals
 
-    for i in range(1, len(df)):
-        child = df.iloc[i]
-        mother = df.iloc[i - 1]
-        child_date = child["date"].date()
+    df = compute_bollinger(df, bb_period, bb_std, bw_hist_period, bw_pct_thresh)
+    df = df.dropna(subset=["bw", "bw_low_thresh"]).reset_index(drop=True)
 
-        if child_date not in scan_dates:
-            continue
-
-        key = (stock_id, child_date, "inside")
-        if key in global_seen:
-            continue
-
-        m_open, m_close = float(mother["open"]), float(mother["close"])
-        c_open, c_close = float(child["open"]), float(child["close"])
-
-        if any(pd.isna(v) or v <= 0 for v in [m_open, m_close, c_open, c_close]):
-            continue
-
-        m_body_hi, m_body_lo = max(m_open, m_close), min(m_open, m_close)
-        c_body_hi, c_body_lo = max(c_open, c_close), min(c_open, c_close)
-
-        if c_body_hi < m_body_hi and c_body_lo > m_body_lo:
-            global_seen.add(key)
-            signals.append({
-                "股票代號": stock_id,
-                "母線日": mother["date"].strftime("%Y-%m-%d"),
-                "子線日": child["date"].strftime("%Y-%m-%d"),
-                "母實高": round(m_body_hi, 2),
-                "母實低": round(m_body_lo, 2),
-                "子實高": round(c_body_hi, 2),
-                "子實低": round(c_body_lo, 2),
-                "子收": round(c_close, 2),
-            })
-
-    return signals
-
-
-# ─────────────────────────── 吞噬型態掃描 ───────────────────────────
-
-def detect_engulfing(df: pd.DataFrame, stock_id: str, scan_dates: set, global_seen: set) -> list:
-    signals = []
-    df = normalize_daily_columns(df)
-
-    for col in ["open", "close", "date"]:
-        if col not in df.columns:
-            return signals
-
-    df["date"] = pd.to_datetime(df["date"].astype(str))
-    df = df.dropna(subset=["open", "close"]).sort_values("date").reset_index(drop=True)
-
-    if len(df) < 2:
+    if len(df) < squeeze_min + 1:
         return signals
+
+    df["is_squeeze"] = df["bw"] <= df["bw_low_thresh"]
+
+    streaks = []
+    streak = 0
+    for sq in df["is_squeeze"]:
+        streak = streak + 1 if sq else 0
+        streaks.append(streak)
+    df["squeeze_streak"] = streaks
 
     for i in range(1, len(df)):
         today = df.iloc[i]
-        yest = df.iloc[i - 1]
+        yesterday = df.iloc[i - 1]
         today_date = today["date"].date()
 
         if today_date not in scan_dates:
             continue
 
-        key = (stock_id, today_date, "engulfing")
+        key = (stock_id, today_date)
         if key in global_seen:
             continue
 
-        y_open, y_close = float(yest["open"]), float(yest["close"])
-        t_open, t_close = float(today["open"]), float(today["close"])
-
-        if any(pd.isna(v) or v <= 0 for v in [y_open, y_close, t_open, t_close]):
+        if not yesterday["is_squeeze"]:
+            continue
+        if int(yesterday["squeeze_streak"]) < squeeze_min:
+            continue
+        if today["is_squeeze"]:
             continue
 
-        y_body_hi, y_body_lo = max(y_open, y_close), min(y_open, y_close)
-        t_body_hi, t_body_lo = max(t_open, t_close), min(t_open, t_close)
+        bw_today = float(today["bw"])
+        bw_yest = float(yesterday["bw"])
 
-        is_engulf = t_body_hi > y_body_hi and t_body_lo < y_body_lo
-        if not is_engulf:
+        if bw_yest <= 0 or bw_today <= bw_yest * expand_ratio:
             continue
 
-        is_bull = y_close < y_open and t_close > t_open
-        is_bear = y_close > y_open and t_close < t_open
-        if not is_bull and not is_bear:
+        squeeze_len = int(yesterday["squeeze_streak"])
+        squeeze_start_idx = max(0, i - squeeze_len)
+        sq_vols = df.iloc[squeeze_start_idx:i]["volume"].astype(float)
+
+        if sq_vols.empty or sq_vols.mean() <= 0:
             continue
 
-        pct_chg = (t_close - y_close) / y_close * 100
-        pattern = "多頭吞噬" if is_bull else "空頭吞噬"
+        avg_sq_vol = float(sq_vols.mean())
+        today_vol = float(today["volume"])
+
+        if today_vol < avg_sq_vol * vol_ratio:
+            continue
+
+        cur_close = float(today["close"])
+        prev_close = float(yesterday["close"])
+        if prev_close <= 0:
+            continue
+
+        pct_chg = (cur_close - prev_close) / prev_close * 100
+        vol_mult = today_vol / avg_sq_vol
 
         global_seen.add(key)
         signals.append({
             "股票代號": stock_id,
-            "型態": pattern,
-            "昨日": yest["date"].strftime("%Y-%m-%d"),
-            "今日": today["date"].strftime("%Y-%m-%d"),
-            "昨實高": round(y_body_hi, 2),
-            "昨實低": round(y_body_lo, 2),
-            "今實高": round(t_body_hi, 2),
-            "今實低": round(t_body_lo, 2),
-            "收盤": round(t_close, 2),
-            "漲跌%": round(pct_chg, 2),
+            "訊號日": today["date"].strftime("%Y-%m-%d"),
+            "收斂天數": squeeze_len,
+            "昨日BW%": round(bw_yest * 100, 3),
+            "今日BW%": round(bw_today * 100, 3),
+            "BW擴張%": round((bw_today / bw_yest - 1) * 100, 2),
+            "收盤": round(cur_close, 2),
+            "漲跌幅%": round(pct_chg, 2),
+            "量能倍數": round(vol_mult, 2),
+            "收斂期均量": int(avg_sq_vol),
+            "今日成交量": int(today_vol),
         })
 
     return signals
 
 
-# ─────────────────────────── 掃描主流程 ───────────────────────────
-
-def make_sampled_codes(mode: str, twse: list, tpex: list, all_codes: list, guest_sample: int) -> list:
-    if mode == "訪客模式：隨機抽樣":
-        half = int(guest_sample) // 2
-        sampled = random.sample(twse, min(half, len(twse))) + random.sample(tpex, min(half, len(tpex)))
-        sampled = list(dict.fromkeys(sampled))
-        random.shuffle(sampled)
-        return sampled
-    return all_codes
-
-
-def run_pattern_scan(token: str, sampled: list, scan_dates: set, fetch_start: str, fetch_end: str, sleep_sec: float, scan_kind: str):
+def run_scan(
+    token: str,
+    sampled: list,
+    scan_dates: set,
+    fetch_start: str,
+    fetch_end: str,
+    sleep_sec: float,
+    bb_period: int,
+    bb_std: float,
+    bw_hist_period: int,
+    bw_pct_thresh: float,
+    squeeze_min: int,
+    expand_ratio: float,
+    vol_ratio: float,
+):
     api = create_api(token)
     all_signals = []
     skipped = []
@@ -552,51 +280,81 @@ def run_pattern_scan(token: str, sampled: list, scan_dates: set, fetch_start: st
     status_text = st.empty()
     t0 = time.time()
 
-    detector = detect_inside_bar if scan_kind == "inside" else detect_engulfing
-
+    total = len(sampled)
     for idx, sid in enumerate(sampled, 1):
         try:
             raw = api.taiwan_stock_daily(stock_id=sid, start_date=fetch_start, end_date=fetch_end)
             if raw is None or raw.empty:
                 skipped.append(sid)
             else:
-                all_signals.extend(detector(raw, sid, scan_dates, global_seen))
+                all_signals.extend(
+                    detect_squeeze(
+                        raw, sid, scan_dates, global_seen,
+                        bb_period, bb_std, bw_hist_period, bw_pct_thresh,
+                        squeeze_min, expand_ratio, vol_ratio
+                    )
+                )
         except Exception:
             skipped.append(sid)
 
-        progress_bar.progress(idx / len(sampled))
+        progress_bar.progress(idx / total)
         status_text.text(
-            f"掃描進度：{idx}/{len(sampled)}｜目前訊號：{len(all_signals)}｜耗時：{time.time() - t0:.1f} 秒"
+            f"掃描進度：{idx}/{total}｜目前訊號：{len(all_signals)}｜耗時：{time.time() - t0:.1f} 秒"
         )
-        time.sleep(float(sleep_sec))
+        time.sleep(sleep_sec)
 
     return all_signals, skipped, time.time() - t0
 
 
-# ─────────────────────────── Streamlit UI ───────────────────────────
-
-st.set_page_config(page_title="台股技術分析整合工具", layout="wide")
-st.title("台股技術分析整合工具")
-st.caption("整合：單檔技術分析、子母懷抱掃描、純吞噬型態掃描。資料來源：FinMind API。")
+st.set_page_config(page_title="台股布林通道收斂擴張掃描器", layout="wide")
+st.title("台股布林通道收斂擴張掃描器")
+st.caption("Bollinger Squeeze Scanner：尋找波動壓縮後，帶寬放大且成交量確認的股票。")
 
 if "token_verified" not in st.session_state:
     st.session_state["token_verified"] = False
-if "token" not in st.session_state:
-    st.session_state["token"] = ""
+
+with st.expander("策略條件說明", expanded=True):
+    st.markdown("""
+**收斂定義**
+- BandWidth = `(布林上軌 - 布林下軌) / 布林中軌`
+- BandWidth 連續多日低於近 60 日 BandWidth 的第 20 百分位。
+
+**訊號成立條件**
+1. 前一日仍在收斂，且收斂天數達門檻。
+2. 今日離開收斂狀態。
+3. 今日 BandWidth 大於昨日 BandWidth × 擴張倍率。
+4. 今日成交量大於收斂期間日均量 × 成交量倍率。
+""")
 
 with st.sidebar:
     st.header("FinMind Token")
-    token_input = st.text_input(
-        "請輸入 FinMind API Token",
-        value=st.session_state.get("token", ""),
-        type="password",
-        placeholder="輸入 Token 後按驗證"
-    )
-
+    token_input = st.text_input("請輸入 FinMind API Token", type="password")
     verify_token = st.button("驗證 Token / 載入股票清單", type="primary")
 
-    st.caption("需先驗證 Token，才能使用掃描全台股功能。")
-    st.warning("若 FinMind 等級不足，可能出現掃描不完全、部分股票無資料、速度變慢或 API 限流等問題。")
+    st.divider()
+    st.header("掃描設定")
+    mode = st.radio(
+        "執行模式",
+        ["訪客模式：隨機抽樣", "完整模式：掃描全台股"],
+        disabled=not st.session_state["token_verified"],
+    )
+    scan_days = st.number_input("掃描近幾個交易日", 1, 20, DEFAULT_SCAN_TRADE_DAYS, 1, disabled=not st.session_state["token_verified"])
+    guest_sample = st.number_input("訪客模式抽樣檔數", 50, 1000, DEFAULT_GUEST_SAMPLE, 50, disabled=not st.session_state["token_verified"])
+    sleep_sec = st.number_input("每檔 API 間隔秒數", 0.05, 2.0, DEFAULT_SLEEP_SEC, 0.05, disabled=not st.session_state["token_verified"])
+
+    st.divider()
+    st.header("策略參數")
+    bb_period = st.number_input("布林週期", 10, 60, DEFAULT_BB_PERIOD, 1, disabled=not st.session_state["token_verified"])
+    bb_std = st.number_input("標準差倍數", 1.0, 4.0, DEFAULT_BB_STD, 0.1, disabled=not st.session_state["token_verified"])
+    bw_hist_period = st.number_input("BandWidth 歷史視窗", 30, 180, DEFAULT_BW_HIST_PERIOD, 5, disabled=not st.session_state["token_verified"])
+    bw_pct_thresh = st.number_input("收斂百分位門檻", 5, 50, DEFAULT_BW_PCT_THRESH, 5, disabled=not st.session_state["token_verified"])
+    squeeze_min = st.number_input("最少連續收斂天數", 2, 30, DEFAULT_SQUEEZE_MIN, 1, disabled=not st.session_state["token_verified"])
+    expand_ratio_pct = st.number_input("BandWidth 擴張門檻 %", 1.0, 50.0, (DEFAULT_EXPAND_RATIO - 1) * 100, 1.0, disabled=not st.session_state["token_verified"])
+    vol_ratio = st.number_input("成交量放大倍率", 1.0, 5.0, DEFAULT_VOL_RATIO, 0.1, disabled=not st.session_state["token_verified"])
+
+    start_scan = st.button("開始掃描", disabled=not st.session_state["token_verified"])
+    st.warning("完整掃描全台股耗時較久，且可能受 FinMind API 權限、請求次數與頻率限制影響。")
+
 
 if verify_token:
     if not token_input:
@@ -607,7 +365,6 @@ if verify_token:
         try:
             twse, tpex, all_codes = fetch_all_stock_codes_cached(token_input)
             if not all_codes:
-                st.session_state["token_verified"] = False
                 st.error("Token 驗證失敗，或無法取得股票清單。")
                 st.stop()
 
@@ -632,204 +389,62 @@ tpex = st.session_state["tpex"]
 all_codes = st.session_state["all_codes"]
 
 st.success("Token 驗證成功，股票清單已載入。")
+c1, c2, c3 = st.columns(3)
+c1.metric("上市股票", len(twse))
+c2.metric("上櫃股票", len(tpex))
+c3.metric("總股票數", len(all_codes))
 
-col_a, col_b, col_c = st.columns(3)
-col_a.metric("上市股票", len(twse))
-col_b.metric("上櫃股票", len(tpex))
-col_c.metric("總股票數", len(all_codes))
+if start_scan:
+    scan_dates = get_recent_trade_dates(int(scan_days))
+    sorted_dates = sorted(scan_dates)
 
+    data_lookback_days = int((int(bb_period) + int(bw_hist_period)) * 2.5)
+    data_lookback_days = max(180, data_lookback_days)
 
-with st.sidebar:
-    st.divider()
-    st.header("功能選擇")
-    page_choice = st.radio(
-        "請選擇功能",
-        ["單檔技術分析", "子母懷抱掃描", "純吞噬型態掃描"],
-        index=0
+    fetch_start = (min(scan_dates) - timedelta(days=data_lookback_days)).strftime("%Y-%m-%d")
+    fetch_end = max(scan_dates).strftime("%Y-%m-%d")
+
+    if mode == "訪客模式：隨機抽樣":
+        half = int(guest_sample) // 2
+        sampled = random.sample(twse, min(half, len(twse))) + random.sample(tpex, min(half, len(tpex)))
+        sampled = list(dict.fromkeys(sampled))
+        random.shuffle(sampled)
+        mode_label = f"訪客模式：隨機抽 {len(sampled)} 檔"
+    else:
+        sampled = all_codes
+        mode_label = f"完整模式：掃描 {len(sampled)} 檔"
+
+    st.warning(mode_label)
+    st.info(f"掃描日期：{sorted_dates[0]} ～ {sorted_dates[-1]}")
+    st.info(f"資料區間：{fetch_start} ～ {fetch_end}")
+
+    expand_ratio = 1 + float(expand_ratio_pct) / 100
+
+    all_signals, skipped, total_time = run_scan(
+        token, sampled, scan_dates, fetch_start, fetch_end, float(sleep_sec),
+        int(bb_period), float(bb_std), int(bw_hist_period), float(bw_pct_thresh),
+        int(squeeze_min), float(expand_ratio), float(vol_ratio)
     )
 
-# ── 掃描設定共用函式 ──
-def render_scan_settings(key_prefix: str):
-    with st.sidebar:
-        st.divider()
-        st.header("掃描設定")
-        mode = st.radio(
-            "執行模式",
-            ["訪客模式：隨機抽樣", "完整模式：掃描全台股"],
-            key=f"{key_prefix}_mode"
+    st.subheader("掃描結果")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("實際掃描", len(sampled) - len(skipped))
+    m2.metric("訊號數", len(all_signals))
+    m3.metric("耗時秒數", f"{total_time:.1f}")
+
+    if skipped:
+        st.caption(f"跳過無資料或失敗股票：{len(skipped)} 檔")
+
+    if not all_signals:
+        st.info("本次掃描無訊號。")
+    else:
+        result_df = pd.DataFrame(all_signals).sort_values(["訊號日", "股票代號"], ascending=[False, True]).reset_index(drop=True)
+        st.dataframe(result_df, use_container_width=True)
+
+        csv = result_df.to_csv(index=False, encoding="utf-8-sig")
+        st.download_button(
+            label="下載 CSV",
+            data=csv.encode("utf-8-sig"),
+            file_name=f"boll_squeeze_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv",
         )
-        scan_days = st.number_input(
-            "掃描近幾個交易日",
-            min_value=1,
-            max_value=20,
-            value=SCAN_TRADE_DAYS,
-            step=1,
-            key=f"{key_prefix}_scan_days"
-        )
-        st.caption("可輸入範圍：1～20；建議 5～10。")
-
-        guest_sample = st.number_input(
-            "訪客模式抽樣檔數",
-            min_value=50,
-            max_value=1000,
-            value=GUEST_SAMPLE,
-            step=50,
-            key=f"{key_prefix}_guest_sample"
-        )
-        st.caption("可輸入範圍：50～1000；數字越大掃描越久。")
-
-        sleep_sec = st.number_input(
-            "每檔 API 間隔秒數",
-            min_value=0.05,
-            max_value=2.0,
-            value=0.15,
-            step=0.05,
-            key=f"{key_prefix}_sleep_sec"
-        )
-        st.caption("可輸入範圍：0.05～2 秒；建議 0.15～0.3 秒，太低可能被 API 限流。")
-
-    return mode, int(scan_days), int(guest_sample), float(sleep_sec)
-
-
-def prepare_scan_dates(scan_days: int):
-    scan_dates = get_recent_trade_dates(scan_days)
-    sorted_dates = sorted(scan_dates)
-    fetch_start = (min(scan_dates) - timedelta(days=7)).strftime("%Y-%m-%d")
-    fetch_end = max(scan_dates).strftime("%Y-%m-%d")
-    return scan_dates, sorted_dates, fetch_start, fetch_end
-
-
-if page_choice == "單檔技術分析":
-    st.subheader("單檔技術分析")
-    st.caption("輸入股票代號，查詢近兩年資料，計算 MA、布林通道、MACD 與狀態訊號。")
-
-    c1, c2 = st.columns([1, 3])
-    with c1:
-        stock_id = st.text_input("股票代號", value="2330", max_chars=4)
-        run_single = st.button("開始分析", type="primary")
-
-    if run_single:
-        if not valid_code(stock_id):
-            st.error("請輸入正確 4 碼台股股票代號。")
-        else:
-            with st.spinner(f"正在取得 {stock_id} 近四年資料並輸出近兩年分析..."):
-                try:
-                    df = fetch_and_analyze_stock(stock_id, token)
-                    display_df = format_analysis_df(df)
-
-                    st.metric("資料筆數", len(display_df))
-
-                    st.subheader("技術分析圖表")
-                    chart_range = st.radio(
-                        "圖表顯示範圍",
-                        ["近 3 個月", "近 6 個月", "近 1 年", "近 2 年"],
-                        horizontal=True,
-                        index=2,
-                    )
-                    range_days = {
-                        "近 3 個月": 90,
-                        "近 6 個月": 180,
-                        "近 1 年": 365,
-                        "近 2 年": 730,
-                    }[chart_range]
-                    chart_df = df[df["date"] >= df["date"].max() - pd.Timedelta(days=range_days)].copy()
-                    render_single_stock_charts(chart_df, stock_id)
-
-                    latest = display_df.iloc[0]
-                    st.info(f"最新日期：{latest['日期']}｜收盤：{latest['收盤']}｜狀態：{latest['狀態']}")
-
-                    st.subheader("分析資料表")
-                    st.dataframe(display_df, use_container_width=True, height=600)
-
-                    csv = display_df.to_csv(index=False, encoding="utf-8-sig")
-                    st.download_button(
-                        "下載單檔分析 CSV",
-                        data=csv.encode("utf-8-sig"),
-                        file_name=f"{stock_id}_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                        mime="text/csv"
-                    )
-                except Exception as e:
-                    st.error(f"分析失敗：{e}")
-
-elif page_choice == "子母懷抱掃描":
-    st.subheader("子母懷抱掃描")
-    st.caption("條件：子線實體完全包在母線實體內，只看開盤價與收盤價，不看影線。")
-
-    mode, scan_days, guest_sample, sleep_sec = render_scan_settings("inside")
-    start_inside = st.button("開始子母懷抱掃描", type="primary")
-
-    if start_inside:
-        scan_dates, sorted_dates, fetch_start, fetch_end = prepare_scan_dates(scan_days)
-        sampled = make_sampled_codes(mode, twse, tpex, all_codes, guest_sample)
-
-        st.info(f"掃描日期：{sorted_dates[0]} ～ {sorted_dates[-1]}")
-        st.info(f"資料區間：{fetch_start} ～ {fetch_end}")
-        st.warning(f"{mode}：本次掃描 {len(sampled)} 檔")
-
-        signals, skipped, total_time = run_pattern_scan(token, sampled, scan_dates, fetch_start, fetch_end, sleep_sec, "inside")
-
-        st.subheader("掃描結果")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("實際掃描", len(sampled) - len(skipped))
-        c2.metric("訊號數", len(signals))
-        c3.metric("耗時秒數", f"{total_time:.1f}")
-
-        if skipped:
-            st.caption(f"跳過無資料或失敗股票：{len(skipped)} 檔")
-
-        if not signals:
-            st.info("本次掃描無訊號。")
-        else:
-            result_df = pd.DataFrame(signals).sort_values(["子線日", "股票代號"], ascending=[False, True]).reset_index(drop=True)
-            st.dataframe(result_df, use_container_width=True)
-            csv = result_df.to_csv(index=False, encoding="utf-8-sig")
-            st.download_button(
-                "下載子母懷抱 CSV",
-                data=csv.encode("utf-8-sig"),
-                file_name=f"inside_bar_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv"
-            )
-
-elif page_choice == "純吞噬型態掃描":
-    st.subheader("純吞噬型態掃描")
-    st.caption("條件：今日 K 線實體嚴格吞噬昨日 K 線實體；多頭吞噬為昨陰今陽，空頭吞噬為昨陽今陰。")
-
-    mode, scan_days, guest_sample, sleep_sec = render_scan_settings("engulf")
-    start_engulf = st.button("開始吞噬型態掃描", type="primary")
-
-    if start_engulf:
-        scan_dates, sorted_dates, fetch_start, fetch_end = prepare_scan_dates(scan_days)
-        sampled = make_sampled_codes(mode, twse, tpex, all_codes, guest_sample)
-
-        st.info(f"掃描日期：{sorted_dates[0]} ～ {sorted_dates[-1]}")
-        st.info(f"資料區間：{fetch_start} ～ {fetch_end}")
-        st.warning(f"{mode}：本次掃描 {len(sampled)} 檔")
-
-        signals, skipped, total_time = run_pattern_scan(token, sampled, scan_dates, fetch_start, fetch_end, sleep_sec, "engulfing")
-
-        st.subheader("掃描結果")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("實際掃描", len(sampled) - len(skipped))
-        c2.metric("訊號數", len(signals))
-        c3.metric("耗時秒數", f"{total_time:.1f}")
-
-        if skipped:
-            st.caption(f"跳過無資料或失敗股票：{len(skipped)} 檔")
-
-        if not signals:
-            st.info("本次掃描無訊號。")
-        else:
-            result_df = pd.DataFrame(signals).sort_values(["今日", "型態", "股票代號"], ascending=[False, True, True]).reset_index(drop=True)
-            bull = result_df[result_df["型態"] == "多頭吞噬"]
-            bear = result_df[result_df["型態"] == "空頭吞噬"]
-
-            st.write(f"多頭吞噬：{len(bull)} 筆｜空頭吞噬：{len(bear)} 筆")
-            st.dataframe(result_df, use_container_width=True)
-
-            csv = result_df.to_csv(index=False, encoding="utf-8-sig")
-            st.download_button(
-                "下載吞噬型態 CSV",
-                data=csv.encode("utf-8-sig"),
-                file_name=f"engulfing_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv"
-            )
