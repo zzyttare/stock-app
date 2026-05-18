@@ -897,201 +897,193 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-:root {
-    --gold: #f3c969;
-    --gold2: #d6a93e;
-    --bg: #050505;
-    --panel: #0d0d0d;
-    --panel2: #111111;
-    --line: #343434;
-    --text: #f2f2f2;
-    --muted: #b8b8b8;
-}
 
+/* ===== 主背景 ===== */
 .stApp {
     background:
-        radial-gradient(circle at 18% 8%, rgba(243,201,105,0.09), transparent 26%),
-        radial-gradient(circle at 82% 0%, rgba(214,169,62,0.08), transparent 24%),
-        linear-gradient(180deg, #050505 0%, #080808 45%, #020202 100%);
-    color: var(--text);
+        linear-gradient(
+            180deg,
+            #0e1117 0%,
+            #0b0d12 100%
+        );
+
+    color: #f0f2f6;
 }
 
+/* ===== 主內容 ===== */
 .block-container {
     padding-top: 2rem;
-    padding-bottom: 8rem;
+    padding-bottom: 4rem;
 }
 
+/* ===== Sidebar ===== */
 section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #090909 0%, #101010 55%, #060606 100%);
-    border-right: 1px solid rgba(243,201,105,0.22);
+    background:
+        linear-gradient(
+            180deg,
+            #11151c 0%,
+            #0d1015 100%
+        );
+
+    border-right: 1px solid rgba(255,255,255,0.06);
 }
 
-section[data-testid="stSidebar"] * {
-    color: #eeeeee;
-}
-
-section[data-testid="stSidebar"] h1,
-section[data-testid="stSidebar"] h2,
-section[data-testid="stSidebar"] h3 {
-    color: var(--gold);
-}
-
+/* ===== 標題 ===== */
 .main-title {
-    font-size: 44px;
-    font-weight: 900;
-    color: var(--gold);
-    letter-spacing: 1px;
-    margin-bottom: 2px;
-    text-shadow: 0 0 20px rgba(243,201,105,0.18);
+    font-size: 42px;
+    font-weight: 800;
+    color: #f0c674;
+    margin-bottom: 5px;
 }
 
 .sub-title {
-    color: var(--muted);
+    color: #9aa4b2;
     font-size: 17px;
-    margin-bottom: 24px;
+    margin-bottom: 20px;
 }
 
-[data-testid="stMetric"] {
-    background: linear-gradient(180deg, rgba(18,18,18,0.96), rgba(8,8,8,0.96));
-    border: 1px solid rgba(243,201,105,0.22);
-    border-radius: 18px;
-    padding: 16px;
-    box-shadow: 0 0 22px rgba(0,0,0,0.35);
-}
-
-[data-testid="stMetricLabel"] {
-    color: #cfcfcf !important;
-}
-
-[data-testid="stMetricValue"] {
-    color: var(--gold) !important;
-}
-
+/* ===== 按鈕 ===== */
 .stButton > button {
-    background: linear-gradient(90deg, #b98a22 0%, #f3c969 55%, #ffe39a 100%);
-    color: #111111;
-    border: 0;
-    border-radius: 12px;
-    font-weight: 800;
-    min-height: 42px;
-    box-shadow: 0 0 18px rgba(243,201,105,0.18);
+    background:
+        linear-gradient(
+            90deg,
+            #d6a84f 0%,
+            #f0c674 100%
+        );
+
+    color: black;
+    border: none;
+    border-radius: 10px;
+    font-weight: 700;
+    height: 44px;
 }
 
 .stButton > button:hover {
-    background: linear-gradient(90deg, #f3c969 0%, #ffe39a 100%);
-    color: #000000;
-    border: 0;
+    background:
+        linear-gradient(
+            90deg,
+            #f0c674 0%,
+            #ffd98a 100%
+        );
 }
 
-.stDownloadButton > button {
-    background: transparent;
-    color: var(--gold);
-    border: 1px solid rgba(243,201,105,0.48);
-    border-radius: 12px;
-    font-weight: 700;
-}
-
-.stDownloadButton > button:hover {
-    background: rgba(243,201,105,0.12);
-    color: #ffe39a;
-    border: 1px solid rgba(243,201,105,0.8);
-}
-
+/* ===== Input ===== */
 .stTextInput input,
 .stNumberInput input {
-    background-color: #0e0e0e !important;
-    color: #ffffff !important;
-    border: 1px solid #3d3d3d !important;
-    border-radius: 10px !important;
+    background-color: #1a1f27 !important;
+    color: white !important;
+    border: 1px solid #343b46 !important;
 }
 
-.stSelectbox div[data-baseweb="select"],
-.stRadio,
-.stCheckbox {
-    color: #eeeeee !important;
+/* ===== SelectBox ===== */
+.stSelectbox div[data-baseweb="select"] {
+    background-color: #1a1f27;
 }
 
+/* ===== dataframe ===== */
 [data-testid="stDataFrame"] {
-    background: #090909;
-    border-radius: 16px;
-    border: 1px solid rgba(243,201,105,0.22);
-    overflow: hidden;
-}
-
-.stAlert {
-    border-radius: 14px;
-}
-
-.streamlit-expanderHeader {
-    background-color: #111111;
-    color: var(--gold) !important;
+    background-color: #12161d;
     border-radius: 12px;
-    border: 1px solid rgba(243,201,105,0.18);
+    border: 1px solid rgba(255,255,255,0.06);
 }
 
-div[data-testid="stExpander"] {
-    border: 1px solid rgba(243,201,105,0.18);
+/* ===== metric ===== */
+[data-testid="metric-container"] {
+    background: #151a22;
+    border: 1px solid rgba(255,255,255,0.06);
+    padding: 14px;
     border-radius: 14px;
-    background: rgba(12,12,12,0.9);
 }
 
-hr {
-    border-color: rgba(243,201,105,0.16);
+/* ===== expander ===== */
+.streamlit-expanderHeader {
+    background-color: #151922;
+    border-radius: 10px;
 }
 
+/* ===== tabs ===== */
+.stTabs [data-baseweb="tab"] {
+    color: #cfd6df;
+}
+
+.stTabs [aria-selected="true"] {
+    color: #f0c674 !important;
+}
+
+/* ===== 左下角警語 ===== */
 .warning-box {
+
     position: fixed;
-    left: 18px;
-    bottom: 18px;
-    width: 330px;
-    max-height: 52vh;
-    overflow-y: auto;
-    background: linear-gradient(180deg, rgba(45,38,13,0.98) 0%, rgba(18,16,9,0.98) 100%);
-    border: 1.8px solid #d6a93e;
-    border-radius: 20px;
-    padding: 18px 20px;
+
+    left: 16px;
+    bottom: 16px;
+
+    width: 250px;
+
+    background:
+        rgba(18,22,28,0.88);
+
+    backdrop-filter: blur(10px);
+
+    border: 1px solid rgba(240,198,116,0.35);
+
+    border-radius: 16px;
+
+    padding: 14px;
+
     z-index: 999999;
-    box-shadow: 0 0 28px rgba(243,201,105,0.20);
+
+    box-shadow:
+        0 0 18px rgba(0,0,0,0.25);
 }
 
+/* ===== 標題 ===== */
 .warning-title {
-    color: #ffd76a;
-    font-size: 22px;
-    font-weight: 900;
+    color: #f0c674;
+    font-size: 18px;
+    font-weight: 800;
     margin-bottom: 10px;
 }
 
+/* ===== 內容 ===== */
 .warning-text {
-    color: #f2f2f2;
-    font-size: 15px;
-    line-height: 1.65;
+    color: #d8dee9;
+    font-size: 12px;
+    line-height: 1.7;
 }
 
+/* ===== 建議參數 ===== */
 .param-title {
-    color: #ffd76a;
-    font-size: 19px;
-    font-weight: 900;
-    margin-top: 14px;
-    padding-top: 14px;
-    border-top: 1px solid rgba(243,201,105,0.28);
+    color: #f0c674;
+    font-size: 16px;
+    font-weight: 800;
+    margin-top: 12px;
+    margin-bottom: 8px;
 }
 
+/* ===== 參數內容 ===== */
 .param-text {
-    color: #e8e8e8;
-    font-size: 14px;
-    line-height: 1.75;
+    color: #d8dee9;
+    font-size: 12px;
+    line-height: 1.7;
 }
 
-@media (max-width: 1100px) {
+/* ===== 手機 ===== */
+@media (max-width: 1000px) {
+
     .warning-box {
+
         position: relative;
+
+        width: 100%;
+
         left: auto;
         bottom: auto;
-        width: auto;
-        max-height: none;
-        margin-top: 24px;
+
+        margin-top: 20px;
     }
 }
+
 </style>
 """, unsafe_allow_html=True)
 
